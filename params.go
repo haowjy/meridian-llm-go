@@ -124,44 +124,79 @@ func ValidateRequestParams(params *RequestParams) error {
 	// Validate ranges
 	if params.Temperature != nil {
 		if *params.Temperature < 0.0 || *params.Temperature > 2.0 {
-			return fmt.Errorf("temperature must be between 0.0 and 2.0, got %f", *params.Temperature)
+			return &ValidationError{
+				Field:  "temperature",
+				Value:  *params.Temperature,
+				Reason: "must be between 0.0 and 2.0",
+				Err:    ErrInvalidRequest,
+			}
 		}
 	}
 
 	if params.TopP != nil {
 		if *params.TopP < 0.0 || *params.TopP > 1.0 {
-			return fmt.Errorf("top_p must be between 0.0 and 1.0, got %f", *params.TopP)
+			return &ValidationError{
+				Field:  "top_p",
+				Value:  *params.TopP,
+				Reason: "must be between 0.0 and 1.0",
+				Err:    ErrInvalidRequest,
+			}
 		}
 	}
 
 	if params.TopK != nil {
 		if *params.TopK < 0 {
-			return fmt.Errorf("top_k must be non-negative, got %d", *params.TopK)
+			return &ValidationError{
+				Field:  "top_k",
+				Value:  *params.TopK,
+				Reason: "must be non-negative",
+				Err:    ErrInvalidRequest,
+			}
 		}
 	}
 
 	if params.MaxTokens != nil {
 		if *params.MaxTokens < 1 {
-			return fmt.Errorf("max_tokens must be positive, got %d", *params.MaxTokens)
+			return &ValidationError{
+				Field:  "max_tokens",
+				Value:  *params.MaxTokens,
+				Reason: "must be positive",
+				Err:    ErrInvalidRequest,
+			}
 		}
 	}
 
 	if params.ThinkingLevel != nil {
 		validLevels := map[string]bool{"low": true, "medium": true, "high": true}
 		if !validLevels[*params.ThinkingLevel] {
-			return fmt.Errorf("thinking_level must be 'low', 'medium', or 'high', got '%s'", *params.ThinkingLevel)
+			return &ValidationError{
+				Field:  "thinking_level",
+				Value:  *params.ThinkingLevel,
+				Reason: "must be 'low', 'medium', or 'high'",
+				Err:    ErrInvalidRequest,
+			}
 		}
 	}
 
 	if params.FrequencyPenalty != nil {
 		if *params.FrequencyPenalty < -2.0 || *params.FrequencyPenalty > 2.0 {
-			return fmt.Errorf("frequency_penalty must be between -2.0 and 2.0, got %f", *params.FrequencyPenalty)
+			return &ValidationError{
+				Field:  "frequency_penalty",
+				Value:  *params.FrequencyPenalty,
+				Reason: "must be between -2.0 and 2.0",
+				Err:    ErrInvalidRequest,
+			}
 		}
 	}
 
 	if params.PresencePenalty != nil {
 		if *params.PresencePenalty < -2.0 || *params.PresencePenalty > 2.0 {
-			return fmt.Errorf("presence_penalty must be between -2.0 and 2.0, got %f", *params.PresencePenalty)
+			return &ValidationError{
+				Field:  "presence_penalty",
+				Value:  *params.PresencePenalty,
+				Reason: "must be between -2.0 and 2.0",
+				Err:    ErrInvalidRequest,
+			}
 		}
 	}
 

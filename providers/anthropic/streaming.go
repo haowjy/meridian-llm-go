@@ -122,28 +122,34 @@ func transformAnthropicStreamEvent(event anthropic.MessageStreamEventUnion) llmp
 		return llmprovider.StreamEvent{} // Empty event, ignored by consumers
 
 	case anthropic.ContentBlockStartEvent:
-		// ContentBlockStart - emit block start delta
+		// ContentBlockStart - emit block start delta with BlockType set
+		blockType := string(e.ContentBlock.Type)
 		delta := &llmprovider.BlockDelta{
 			BlockIndex: int(e.Index),
-			BlockType:  string(e.ContentBlock.Type),
+			BlockType:  &blockType, // Set BlockType pointer (signals block start)
 		}
 
-		// Extract block-specific initialization data
+		// Set appropriate DeltaType based on block type
 		switch e.ContentBlock.Type {
+		case "text":
+			delta.DeltaType = llmprovider.DeltaTypeText
+
 		case "thinking":
-			if e.ContentBlock.Signature != "" {
-				signature := e.ContentBlock.Signature
-				delta.ThinkingSignature = &signature
-			}
+			delta.DeltaType = llmprovider.DeltaTypeThinking
+			// Initial signature comes in signature_delta events, not here
+			// (Anthropic sends empty signature:"" in content_block_start)
 
 		case "tool_use":
+			delta.DeltaType = llmprovider.DeltaTypeToolCallStart
 			if e.ContentBlock.ID != "" {
 				toolID := e.ContentBlock.ID
-				delta.ToolUseID = &toolID
+				delta.ToolCallID = &toolID
+				delta.ToolUseID = &toolID // Legacy field
 			}
 			if e.ContentBlock.Name != "" {
 				toolName := e.ContentBlock.Name
-				delta.ToolName = &toolName
+				delta.ToolCallName = &toolName
+				delta.ToolName = &toolName // Legacy field
 			}
 		}
 
@@ -158,12 +164,22 @@ func transformAnthropicStreamEvent(event anthropic.MessageStreamEventUnion) llmp
 		// Extract delta based on type
 		switch e.Delta.Type {
 		case "text_delta":
-			delta.DeltaType = llmprovider.DeltaTypeTextDelta
+			delta.DeltaType = llmprovider.DeltaTypeText
 			text := e.Delta.Text
 			delta.TextDelta = &text
 
+		case "thinking_delta":
+			delta.DeltaType = llmprovider.DeltaTypeThinking
+			text := e.Delta.Thinking
+			delta.TextDelta = &text
+
+		case "signature_delta":
+			delta.DeltaType = llmprovider.DeltaTypeSignature
+			sig := e.Delta.Signature
+			delta.SignatureDelta = &sig
+
 		case "input_json_delta":
-			delta.DeltaType = llmprovider.DeltaTypeInputJSONDelta
+			delta.DeltaType = llmprovider.DeltaTypeInputJSON
 			jsonDelta := e.Delta.PartialJSON
 			delta.InputJSONDelta = &jsonDelta
 		}

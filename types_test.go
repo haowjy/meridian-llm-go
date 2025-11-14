@@ -86,7 +86,7 @@ func TestBlockDelta_Structure(t *testing.T) {
 	// Test that BlockDelta can be created and accessed
 	delta := &BlockDelta{
 		BlockIndex: 0,
-		BlockType:  BlockTypeText,
+		BlockType:  stringPtr(BlockTypeText),
 		DeltaType:  DeltaTypeTextDelta,
 		TextDelta:  stringPtr("Hello"),
 	}
@@ -95,8 +95,8 @@ func TestBlockDelta_Structure(t *testing.T) {
 		t.Errorf("BlockIndex = %d, want 0", delta.BlockIndex)
 	}
 
-	if delta.BlockType != BlockTypeText {
-		t.Errorf("BlockType = %s, want %s", delta.BlockType, BlockTypeText)
+	if delta.BlockType == nil || *delta.BlockType != BlockTypeText {
+		t.Errorf("BlockType = %v, want %s", delta.BlockType, BlockTypeText)
 	}
 
 	if delta.TextDelta == nil || *delta.TextDelta != "Hello" {

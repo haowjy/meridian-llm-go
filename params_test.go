@@ -15,9 +15,10 @@ func TestValidateRequestParams_Temperature(t *testing.T) {
 		{"temperature 0.0", float64Ptr(0.0), false},
 		{"temperature 1.0", float64Ptr(1.0), false},
 		{"temperature 0.5", float64Ptr(0.5), false},
+		{"temperature 1.1", float64Ptr(1.1), false},
+		{"temperature 2.0", float64Ptr(2.0), false},
 		{"temperature -0.1 is invalid", float64Ptr(-0.1), true},
-		{"temperature 1.1 is invalid", float64Ptr(1.1), true},
-		{"temperature 2.0 is invalid", float64Ptr(2.0), true},
+		{"temperature 2.1 is invalid", float64Ptr(2.1), true},
 	}
 
 	for _, tt := range tests {

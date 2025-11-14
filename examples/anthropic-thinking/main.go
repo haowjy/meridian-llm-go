@@ -85,8 +85,7 @@ func main() {
 	}
 
 	// Track which block we're currently receiving
-	currentBlockType := ""
-	currentBlockIndex := -1
+	var currentBlockType *string // BlockType is now *string (optional, signals block start)
 
 	// Read streaming events
 	for event := range eventChan {
@@ -97,16 +96,15 @@ func main() {
 
 		// Handle deltas (incremental content)
 		if event.Delta != nil {
-			// Check if we started a new block
-			if event.Delta.BlockIndex != currentBlockIndex {
-				currentBlockIndex = event.Delta.BlockIndex
+			// Check if we started a new block (BlockType is set on first delta only)
+			if event.Delta.BlockType != nil {
 				currentBlockType = event.Delta.BlockType
 
 				// Print block header
-				if currentBlockType == llmprovider.BlockTypeThinking {
+				if *currentBlockType == llmprovider.BlockTypeThinking {
 					fmt.Println("🧠 THINKING BLOCK:")
 					fmt.Println("---")
-				} else if currentBlockType == llmprovider.BlockTypeText {
+				} else if *currentBlockType == llmprovider.BlockTypeText {
 					fmt.Println("\n💬 ANSWER BLOCK:")
 					fmt.Println("---")
 				}

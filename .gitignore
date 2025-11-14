@@ -1,0 +1,38 @@
+# Binaries for plugins (executables)
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+*.coverprofile
+
+# Go workspace file (submodule-specific)
+go.work
+go.work.sum
+
+# Example binaries (built from examples/)
+anthropic-basic
+anthropic-streaming
+anthropic-thinking
+lorem-basic
+lorem-streaming
+
+# Environment files
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store

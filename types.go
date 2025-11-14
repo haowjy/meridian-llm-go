@@ -3,9 +3,9 @@ package llmprovider
 // Block type constants
 const (
 	BlockTypeText       = "text"
-	BlockTypeThinking   = "thinking"   // Claude extended thinking
+	BlockTypeThinking   = "thinking" // Claude extended thinking
 	BlockTypeToolUse    = "tool_use"
-	BlockTypeToolResult = "tool_result"
+	BlockTypeToolResult = "tool_result" // Result is the result sent back from the tool call
 	BlockTypeImage      = "image"
 	BlockTypeDocument   = "document" // Provider file uploads (Anthropic/Gemini)
 )
@@ -60,18 +60,31 @@ func (b *Block) IsToolBlock() bool {
 
 // Delta type constants for streaming events
 const (
-	DeltaTypeTextDelta      = "text_delta"       // Text content delta
-	DeltaTypeInputJSONDelta = "input_json_delta" // Tool input JSON delta
+	DeltaTypeText          = "text_delta"       // Regular text content
+	DeltaTypeThinking      = "thinking_delta"   // Thinking/reasoning text
+	DeltaTypeSignature     = "signature_delta"  // Cryptographic signature (Anthropic/Gemini Extended Thinking)
+	DeltaTypeToolCallStart = "tool_call_start"  // Tool call initiated (name, id)
+	DeltaTypeInputJSON     = "input_json_delta" // Incremental tool input JSON
+	DeltaTypeUsage         = "usage_delta"      // Token usage updates
+
+	// Legacy aliases for backwards compatibility
+	DeltaTypeTextDelta      = DeltaTypeText
+	DeltaTypeInputJSONDelta = DeltaTypeInputJSON
 )
 
 // BlockDelta represents an incremental update to a block during streaming.
 // This is an ephemeral type - deltas are accumulated in memory and never persisted.
 //
 // Delta flow:
-//   1. Provider streams deltas (e.g., Anthropic content_block_delta events)
-//   2. Deltas transformed to BlockDelta
-//   3. Consumer accumulates deltas in memory
-//   4. On block completion, accumulated content becomes a complete Block
+//  1. Provider streams deltas (e.g., Anthropic content_block_delta events)
+//  2. Deltas transformed to BlockDelta
+//  3. Consumer accumulates deltas in memory
+//  4. On block completion, accumulated content becomes a complete Block
+//
+// BlockType is optional and signals block starts:
+//   - Set on first delta for a block (acts as block_start signal)
+//   - Nil on subsequent deltas for the same block
+//   - Allows consumer to detect new blocks without separate events
 type BlockDelta struct {
 	// BlockIndex identifies which block this delta belongs to (0-indexed)
 	// Matches the Sequence field in Block
@@ -79,31 +92,66 @@ type BlockDelta struct {
 
 	// BlockType indicates the type of block being accumulated
 	// Values: "text", "thinking", "tool_use"
-	BlockType string `json:"block_type"`
+	// OPTIONAL: Only set on first delta for a block (signals block start)
+	BlockType *string `json:"block_type,omitempty"`
 
 	// DeltaType indicates what kind of delta this is
-	// Values: "text_delta", "input_json_delta"
+	// Values: "text_delta", "thinking_delta", "signature_delta",
+	//         "tool_call_start", "input_json_delta", "usage_delta"
 	DeltaType string `json:"delta_type"`
 
-	// TextDelta contains the incremental text content (for text/thinking blocks)
+	// === Content Deltas ===
+
+	// TextDelta contains incremental text content (text or thinking blocks)
 	// Accumulated into Block.TextContent
 	TextDelta *string `json:"text_delta,omitempty"`
 
-	// InputJSONDelta contains incremental JSON for tool input (for tool_use blocks)
+	// SignatureDelta contains incremental cryptographic signature
+	// (Anthropic/Gemini Extended Thinking only)
+	// Accumulated into Block.Content["signature"]
+	SignatureDelta *string `json:"signature_delta,omitempty"`
+
+	// InputJSONDelta contains incremental JSON for tool input (tool_use blocks)
 	// Accumulated into Block.Content["input"]
 	InputJSONDelta *string `json:"input_json_delta,omitempty"`
 
-	// ToolUseID is set when a tool_use block starts
+	// === Tool Call Metadata ===
+
+	// ToolCallID identifies the tool call (set on tool_call_start)
+	// Stored in Block.Content["id"]
+	ToolCallID *string `json:"tool_call_id,omitempty"`
+
+	// ToolCallName is the function name (set on tool_call_start)
+	// Stored in Block.Content["name"]
+	ToolCallName *string `json:"tool_call_name,omitempty"`
+
+	// === Legacy Fields (for backwards compatibility) ===
+
+	// ToolUseID is DEPRECATED, use ToolCallID instead
 	// Stored in Block.Content["tool_use_id"]
 	ToolUseID *string `json:"tool_use_id,omitempty"`
 
-	// ToolName is set when a tool_use block starts
+	// ToolName is DEPRECATED, use ToolCallName instead
 	// Stored in Block.Content["tool_name"]
 	ToolName *string `json:"tool_name,omitempty"`
 
-	// ThinkingSignature is set when a thinking block starts (e.g., "4k_a")
+	// ThinkingSignature is DEPRECATED, use SignatureDelta with DeltaTypeSignature
 	// Stored in Block.Content["signature"]
 	ThinkingSignature *string `json:"thinking_signature,omitempty"`
+
+	// === Usage Metadata ===
+
+	// InputTokens contains input/prompt token count
+	// Accumulated at Turn level (not Block level)
+	InputTokens *int `json:"input_tokens,omitempty"`
+
+	// OutputTokens contains output/completion token count
+	// Accumulated at Turn level (not Block level)
+	OutputTokens *int `json:"output_tokens,omitempty"`
+
+	// ThinkingTokens contains thinking-specific token count (Gemini)
+	// Stored in Turn.ResponseMetadata["thinking_tokens"]
+	ThinkingTokens *int `json:"thinking_tokens,omitempty"`
 }
 
 // IsTextDelta returns true if this delta contains text content
@@ -117,7 +165,18 @@ func (d *BlockDelta) IsInputJSONDelta() bool {
 }
 
 // IsBlockStart returns true if this delta signals the start of a new block
-// Detected by presence of block-specific initialization fields
+// Detected by BlockType field being set (non-nil)
 func (d *BlockDelta) IsBlockStart() bool {
-	return d.ToolUseID != nil || d.ToolName != nil || d.ThinkingSignature != nil
+	return d.BlockType != nil
+}
+
+// IsSignatureDelta returns true if this delta contains signature content
+func (d *BlockDelta) IsSignatureDelta() bool {
+	return d.DeltaType == DeltaTypeSignature && d.SignatureDelta != nil
+}
+
+// IsUsageDelta returns true if this delta contains token usage updates
+func (d *BlockDelta) IsUsageDelta() bool {
+	return d.DeltaType == DeltaTypeUsage &&
+		(d.InputTokens != nil || d.OutputTokens != nil || d.ThinkingTokens != nil)
 }

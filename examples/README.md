@@ -4,7 +4,30 @@ This directory contains runnable examples demonstrating the llmprovider library 
 
 ## Quick Start
 
-### 1. Test Without API Key (Lorem Provider)
+### Using Makefile (Recommended)
+
+The fastest way to test examples - builds and runs in one command:
+
+```bash
+# Test without API key (Lorem provider)
+make run-lorem-streaming  # Mock streaming (30 words/second)
+make run-lorem-basic      # Mock non-streaming (10s delay)
+
+# Test with Anthropic API (requires ANTHROPIC_API_KEY)
+make run-anthropic-basic      # Simple Claude response
+make run-anthropic-streaming  # Real-time streaming
+make run-anthropic-thinking   # Extended thinking mode
+
+# Build all examples as binaries
+make examples
+
+# Clean up built binaries
+make clean
+```
+
+### Manual Testing with `go run`
+
+#### 1. Test Without API Key (Lorem Provider)
 
 The Lorem provider generates mock responses and requires no API key - perfect for testing!
 
@@ -16,7 +39,7 @@ go run examples/lorem-streaming/main.go
 go run examples/lorem-basic/main.go
 ```
 
-### 2. Test With Anthropic API Key
+#### 2. Test With Anthropic API Key
 
 Get your API key from [console.anthropic.com](https://console.anthropic.com/).
 

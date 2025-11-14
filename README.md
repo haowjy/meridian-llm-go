@@ -333,14 +333,37 @@ Run tests:
 go test ./...
 ```
 
-Run examples (no API key needed):
+### Using Makefile (Recommended)
+
+Build and run examples in one command:
+
 ```bash
-go run examples/lorem-streaming/main.go
-go run examples/lorem-basic/main.go
+# No API key needed - Lorem examples
+make run-lorem-streaming
+make run-lorem-basic
+
+# Requires ANTHROPIC_API_KEY environment variable
+make run-anthropic-basic
+make run-anthropic-streaming
+make run-anthropic-thinking
+
+# Build all examples as binaries
+make examples
+
+# Clean up binaries
+make clean
 ```
 
-Run with Anthropic API key:
+### Manual Testing (Alternative)
+
+Run examples directly with `go run`:
+
 ```bash
+# No API key needed
+go run examples/lorem-streaming/main.go
+go run examples/lorem-basic/main.go
+
+# Requires ANTHROPIC_API_KEY
 export ANTHROPIC_API_KEY="sk-ant-..."
 go run examples/anthropic-basic/main.go
 go run examples/anthropic-streaming/main.go
@@ -388,20 +411,9 @@ meridian-llm-go/
 5. **Minimal Dependencies**: Only official provider SDKs
 6. **Extensible**: Easy to add custom providers
 
-## Comparison with Meridian Backend
-
-| Feature | meridian-llm-go | Meridian Backend |
-|---------|---------------------|------------------|
-| Content Types | ✅ Block, BlockDelta | Turn, TurnBlock (with DB fields) |
-| Providers | ✅ Anthropic, Lorem | Same, but tightly coupled |
-| Streaming | ✅ Provider.StreamResponse() | TurnExecutor + custom SSE |
-| Error Handling | ✅ Typed errors | Generic fmt.Errorf |
-| Dependencies | Only provider SDKs | Full backend stack |
-| Reusability | ✅ Any Go project | Meridian-specific |
-
 ## Contributing
 
-This library was extracted from [Meridian](https://github.com/yourusername/meridian) to enable reuse across projects.
+Production-tested and designed for multi-LLM support in any Go application.
 
 Contributions welcome:
 - Add new providers (OpenAI, Gemini, etc.)
