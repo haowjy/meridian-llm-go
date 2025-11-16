@@ -26,9 +26,9 @@ func NewProvider() *Provider {
 	}
 }
 
-// Name returns the provider name.
-func (p *Provider) Name() string {
-	return "lorem"
+// Name returns the provider identifier.
+func (p *Provider) Name() llmprovider.ProviderID {
+	return llmprovider.ProviderLorem
 }
 
 // SupportsModel returns true if the model name starts with "lorem-".
@@ -44,7 +44,7 @@ func (p *Provider) GenerateResponse(ctx context.Context, req *llmprovider.Genera
 	if !p.SupportsModel(req.Model) {
 		return nil, &llmprovider.ModelError{
 			Model:    req.Model,
-			Provider: p.Name(),
+			Provider: p.Name().String(),
 			Reason:   "model not supported by Lorem provider (must start with 'lorem-')",
 			Err:      llmprovider.ErrInvalidModel,
 		}
@@ -160,7 +160,7 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 	if !p.SupportsModel(req.Model) {
 		return nil, &llmprovider.ModelError{
 			Model:    req.Model,
-			Provider: p.Name(),
+			Provider: p.Name().String(),
 			Reason:   "model not supported by Lorem provider (must start with 'lorem-')",
 			Err:      llmprovider.ErrInvalidModel,
 		}
@@ -173,6 +173,7 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 	}
 	maxTokens := params.GetMaxTokens(4096)
 	thinkingEnabled := params.ThinkingEnabled != nil && *params.ThinkingEnabled
+	toolsEnabled := len(params.Tools) > 0
 
 	// Create buffered channel
 	eventChan := make(chan llmprovider.StreamEvent, 10)
@@ -184,13 +185,12 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 		blockIndex := 0
 		totalOutputTokens := 0
 		stopReason := "end_turn"
-		toolIndex := 0 // Rotate through tool templates
-		toolTemplates := getToolTemplates()
+		toolIndex := 0 // Rotate through requested tools
 
-		log.Printf("[LOREM] StreamResponse started: model=%s, thinking_enabled=%v, max_tokens=%d",
-			req.Model, thinkingEnabled, maxTokens)
+		log.Printf("[LOREM] StreamResponse started: model=%s, thinking_enabled=%v, tools_enabled=%v, max_tokens=%d",
+			req.Model, thinkingEnabled, toolsEnabled, maxTokens)
 
-		// Rotation pattern: text → [thinking] → tool_use → repeat
+		// Rotation pattern: text → [thinking] → [tool_use if enabled] → repeat
 		// Each text/thinking block: 20 words
 		// Tool blocks: ~20 tokens for JSON
 		for totalOutputTokens < maxTokens {
@@ -242,7 +242,7 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 					stopReason = "max_tokens"
 					break
 				}
-			} else {
+			} else if toolsEnabled {
 				// Block 2, 5, 8... : Tool use block (~20 tokens for JSON)
 				log.Printf("[LOREM] Executing TOOL_USE block: blockIndex=%d, toolIndex=%d", blockIndex, toolIndex)
 				if remainingTokens < 20 {
@@ -251,8 +251,9 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 					break
 				}
 
-				tool := toolTemplates[toolIndex%len(toolTemplates)]
-				outputTokens, err := p.streamToolUseBlock(ctx, eventChan, blockIndex, tool, req.Model)
+				// Use requested tool (rotate through Tools)
+				builtInTool := params.Tools[toolIndex%len(params.Tools)]
+				outputTokens, err := p.streamToolUseBlockFromBuiltIn(ctx, eventChan, blockIndex, &builtInTool, req.Model)
 				if err != nil {
 					eventChan <- llmprovider.StreamEvent{Error: err}
 					return
@@ -262,6 +263,9 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 				toolIndex++
 				log.Printf("[LOREM] TOOL_USE block complete: outputTokens=%d, newTotal=%d",
 					outputTokens, totalOutputTokens)
+			} else {
+				// No tools enabled, skip tool block
+				blockIndex++
 			}
 
 			// Safety check: prevent infinite loop
@@ -496,6 +500,95 @@ func (p *Provider) generateTextWords(targetWords int) string {
 	}
 
 	return strings.TrimSpace(sb.String())
+}
+
+// streamToolUseBlockFromBuiltIn streams a tool_use block based on BuiltInTool.
+// Returns (token count, error).
+func (p *Provider) streamToolUseBlockFromBuiltIn(ctx context.Context, eventChan chan<- llmprovider.StreamEvent, blockIndex int, tool *llmprovider.Tool, model string) (int, error) {
+	// Generate mock input based on tool function name (OpenAI format)
+	var input map[string]interface{}
+
+	switch tool.Function.Name {
+	case "search":
+		input = map[string]interface{}{
+			"query": "lorem ipsum dolor sit amet",
+		}
+	case "text_editor":
+		input = map[string]interface{}{
+			"command":   "str_replace",
+			"file_path": "/path/to/file.txt",
+			"old_str":   "consectetur",
+			"new_str":   "adipiscing",
+		}
+	case "bash":
+		input = map[string]interface{}{
+			"command": "echo 'lorem ipsum'",
+		}
+	default:
+		// Custom tool - use parameters schema if available
+		if tool.Function.Parameters != nil {
+			// Generate mock values based on schema
+			input = map[string]interface{}{
+				"param1": "lorem",
+				"param2": "ipsum",
+			}
+		} else {
+			input = map[string]interface{}{
+				"data": "mock input for " + tool.Function.Name,
+			}
+		}
+	}
+
+	// Send block start with tool metadata
+	toolUseType := llmprovider.BlockTypeToolUse
+	toolID := fmt.Sprintf("toolu_%s_%d", tool.Function.Name, blockIndex)
+
+	eventChan <- llmprovider.StreamEvent{
+		Delta: &llmprovider.BlockDelta{
+			BlockIndex:   blockIndex,
+			BlockType:    &toolUseType,
+			DeltaType:    llmprovider.DeltaTypeToolCallStart,
+			ToolCallID:   &toolID,
+			ToolCallName: &tool.Function.Name,
+		},
+	}
+
+	// Note: ExecutionSide is set at the Block level, not in Delta
+	// The consumer will need to check tool capabilities to determine execution side
+
+	// Serialize tool input to JSON
+	jsonBytes, err := json.MarshalIndent(input, "", "  ")
+	if err != nil {
+		return 0, fmt.Errorf("failed to marshal tool input: %w", err)
+	}
+	jsonStr := string(jsonBytes)
+
+	// Get delay based on model
+	delay := getStreamDelay(model)
+
+	// Stream JSON character by character (simulating incremental JSON building)
+	for i, char := range jsonStr {
+		select {
+		case <-ctx.Done():
+			return i, ctx.Err()
+		default:
+		}
+
+		delta := string(char)
+		eventChan <- llmprovider.StreamEvent{
+			Delta: &llmprovider.BlockDelta{
+				BlockIndex:     blockIndex,
+				DeltaType:      llmprovider.DeltaTypeInputJSONDelta,
+				InputJSONDelta: &delta,
+			},
+		}
+
+		time.Sleep(delay / 10) // JSON streams faster than words
+	}
+
+	// Estimate tokens (rough: 1 token per 4 chars in JSON)
+	tokenCount := len(jsonStr) / 4
+	return tokenCount, nil
 }
 
 // estimateTokens estimates the token count for a list of messages.

@@ -16,7 +16,7 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 	if !p.SupportsModel(req.Model) {
 		return nil, &llmprovider.ModelError{
 			Model:    req.Model,
-			Provider: p.Name(),
+			Provider: p.Name().String(),
 			Reason:   "model not supported by Anthropic (must start with 'claude-')",
 			Err:      llmprovider.ErrInvalidModel,
 		}
@@ -54,18 +54,21 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 			}
 
 			// Transform Anthropic event to library StreamEvent
-			streamEvent := transformAnthropicStreamEvent(event)
+			// Pass accumulated message so we can emit complete blocks on ContentBlockStop
+			streamEvent := transformAnthropicStreamEvent(event, &message)
 
-			// Send to channel (check context in case consumer cancelled)
-			select {
-			case <-ctx.Done():
-				// Consumer cancelled, send error and exit
-				eventChan <- llmprovider.StreamEvent{
-					Error: ctx.Err(),
+			// Send to channel if not empty (check context in case consumer cancelled)
+			if streamEvent.Delta != nil || streamEvent.Block != nil || streamEvent.Error != nil {
+				select {
+				case <-ctx.Done():
+					// Consumer cancelled, send error and exit
+					eventChan <- llmprovider.StreamEvent{
+						Error: ctx.Err(),
+					}
+					return
+				case eventChan <- streamEvent:
+					// Successfully sent
 				}
-				return
-			case eventChan <- streamEvent:
-				// Successfully sent
 			}
 		}
 
@@ -108,25 +111,51 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 
 // transformAnthropicStreamEvent converts an Anthropic streaming event to a library StreamEvent.
 //
+// The message parameter is the SDK's accumulated message, which contains complete ContentBlocks
+// as they finish streaming. We use this to emit complete, normalized blocks when ContentBlockStop arrives.
+//
 // Anthropic stream events include:
 // - MessageStart: Contains message metadata (id, model, role)
 // - ContentBlockStart: New content block started (index, type)
 // - ContentBlockDelta: Incremental content for current block (text_delta, input_json_delta)
-// - ContentBlockStop: Current block finished
+// - ContentBlockStop: Current block finished → we emit complete block here
 // - MessageDelta: Message-level delta (stop_reason, stop_sequence)
 // - MessageStop: Streaming complete
-func transformAnthropicStreamEvent(event anthropic.MessageStreamEventUnion) llmprovider.StreamEvent {
+func transformAnthropicStreamEvent(event anthropic.MessageStreamEventUnion, message *anthropic.Message) llmprovider.StreamEvent {
 	switch e := event.AsAny().(type) {
 	case anthropic.MessageStartEvent:
 		// MessageStart event - not needed for deltas, metadata comes at the end
 		return llmprovider.StreamEvent{} // Empty event, ignored by consumers
 
 	case anthropic.ContentBlockStartEvent:
-		// ContentBlockStart - emit block start delta with BlockType set
-		blockType := string(e.ContentBlock.Type)
+		// ContentBlockStart - emit block start delta with BlockType set.
+		// For provider-specific types, we normalize BlockType to library block types
+		// so downstream consumers see consistent values (e.g., "web_search_use", "web_search_result").
+		var blockType string
+		switch e.ContentBlock.Type {
+		case "text":
+			blockType = llmprovider.BlockTypeText
+		case "thinking":
+			blockType = llmprovider.BlockTypeThinking
+		case "tool_use":
+			blockType = llmprovider.BlockTypeToolUse
+		case "server_tool_use":
+			// Server-side tools: web_search_use vs other server tools
+			if e.ContentBlock.Name == "web_search" {
+				blockType = llmprovider.BlockTypeWebSearch
+			} else {
+				blockType = llmprovider.BlockTypeToolUse
+			}
+		case "web_search_tool_result":
+			blockType = llmprovider.BlockTypeWebSearchResult
+		default:
+			// Fallback to raw provider type string
+			blockType = string(e.ContentBlock.Type)
+		}
+
 		delta := &llmprovider.BlockDelta{
 			BlockIndex: int(e.Index),
-			BlockType:  &blockType, // Set BlockType pointer (signals block start)
+			BlockType:  &blockType, // Signals block start with normalized type
 		}
 
 		// Set appropriate DeltaType based on block type
@@ -151,6 +180,34 @@ func transformAnthropicStreamEvent(event anthropic.MessageStreamEventUnion) llmp
 				delta.ToolCallName = &toolName
 				delta.ToolName = &toolName // Legacy field
 			}
+
+		case "server_tool_use":
+		// Server-side tools (web_search) arrive complete in ContentBlockStart
+		// No input_json_delta events will follow - input is complete on arrival
+		delta.DeltaType = llmprovider.DeltaTypeToolCallStart
+		if e.ContentBlock.ID != "" {
+			toolID := e.ContentBlock.ID
+			delta.ToolCallID = &toolID
+			delta.ToolUseID = &toolID // Legacy field
+		}
+		if e.ContentBlock.Name != "" {
+			toolName := e.ContentBlock.Name
+			delta.ToolCallName = &toolName
+			delta.ToolName = &toolName // Legacy field
+		}
+		// Note: Input is complete but we don't send it in the delta
+		// The complete block (with ProviderData) will be emitted on ContentBlockStop
+
+		case "web_search_tool_result":
+		// Web search results arrive complete in ContentBlockStart
+		// No deltas will follow - this is a complete block
+		// Emit a delta to signal block start, complete data comes in ContentBlockStop
+		delta.DeltaType = llmprovider.DeltaTypeToolResult
+		if e.ContentBlock.ToolUseID != "" {
+			toolID := e.ContentBlock.ToolUseID
+			delta.ToolCallID = &toolID
+			delta.ToolUseID = &toolID // Legacy field
+		}
 		}
 
 		return llmprovider.StreamEvent{Delta: delta}
@@ -187,8 +244,28 @@ func transformAnthropicStreamEvent(event anthropic.MessageStreamEventUnion) llmp
 		return llmprovider.StreamEvent{Delta: delta}
 
 	case anthropic.ContentBlockStopEvent:
-		// ContentBlockStop - not needed, block completion handled by consumer
-		return llmprovider.StreamEvent{} // Empty event
+		// ContentBlockStop - emit complete normalized block using shared conversion logic
+		// The SDK has accumulated the complete block in message.Content[index]
+		blockIndex := int(e.Index)
+
+		// Validate block index
+		if blockIndex < 0 || blockIndex >= len(message.Content) {
+			return llmprovider.StreamEvent{
+				Error: fmt.Errorf("invalid block index %d, message has %d blocks", blockIndex, len(message.Content)),
+			}
+		}
+
+		// Convert the complete Anthropic block to library format using shared logic
+		// This handles normalization of provider-specific types (server_tool_use → web_search,
+		// web_search_tool_result → web_search_result)
+		block, err := convertAnthropicBlock(message.Content[blockIndex], blockIndex)
+		if err != nil {
+			return llmprovider.StreamEvent{
+				Error: fmt.Errorf("convert block %d: %w", blockIndex, err),
+			}
+		}
+
+		return llmprovider.StreamEvent{Block: block}
 
 	case anthropic.MessageDeltaEvent:
 		// MessageDelta - contains stop_reason, handled in FinalMessage

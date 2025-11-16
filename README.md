@@ -274,6 +274,21 @@ params := &llmprovider.RequestParams{
 
 Thinking blocks are emitted as separate content blocks during streaming.
 
+## Tools
+
+Supports built-in and custom tools with auto-mapping:
+
+```go
+params := &llmprovider.RequestParams{
+    Tools: []llmprovider.Tool{
+        {Name: "web_search"},  // Auto-maps to built-in
+        {Name: "bash"},
+    },
+}
+```
+
+See [docs/tools.md](docs/tools.md) for comprehensive guide including custom tools and execution patterns.
+
 ## Error Handling
 
 The library provides typed errors for programmatic handling:

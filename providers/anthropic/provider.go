@@ -29,9 +29,9 @@ func NewProvider(apiKey string) (*Provider, error) {
 	}, nil
 }
 
-// Name returns the provider name.
-func (p *Provider) Name() string {
-	return "anthropic"
+// Name returns the provider identifier.
+func (p *Provider) Name() llmprovider.ProviderID {
+	return llmprovider.ProviderAnthropic
 }
 
 // SupportsModel returns true if this provider supports the given model.
@@ -46,7 +46,7 @@ func (p *Provider) GenerateResponse(ctx context.Context, req *llmprovider.Genera
 	if !p.SupportsModel(req.Model) {
 		return nil, &llmprovider.ModelError{
 			Model:    req.Model,
-			Provider: p.Name(),
+			Provider: p.Name().String(),
 			Reason:   "model not supported by Anthropic (must start with 'claude-')",
 			Err:      llmprovider.ErrInvalidModel,
 		}

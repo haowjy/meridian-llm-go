@@ -216,23 +216,36 @@ func TestRequestParams_GetThinkingBudgetTokens(t *testing.T) {
 			expected: 12000,
 		},
 		{
-			name: "unknown thinking level returns 0",
+			name: "unknown thinking level returns error",
 			params: &RequestParams{
 				ThinkingEnabled: boolPtr(true),
 				ThinkingLevel:   stringPtr("unknown"),
 			},
-			expected: 0,
+			expected: 0, // Will be ignored since we expect an error
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var result int
+			var err error
 			if tt.params == nil {
 				// Nil params means no thinking
 				result = 0
 			} else {
-				result = tt.params.GetThinkingBudgetTokens()
+				result, err = tt.params.GetThinkingBudgetTokens("anthropic", "claude-sonnet-4-5")
+
+				// Special case: "unknown thinking level" should return an error
+				if tt.name == "unknown thinking level returns error" {
+					if err == nil {
+						t.Errorf("GetThinkingBudgetTokens() expected error for unknown level, got nil")
+					}
+					return // Test passes if error is returned
+				}
+
+				if err != nil {
+					t.Errorf("GetThinkingBudgetTokens() unexpected error = %v", err)
+				}
 			}
 
 			if result != tt.expected {

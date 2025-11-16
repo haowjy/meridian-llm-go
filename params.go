@@ -42,6 +42,10 @@ type RequestParams struct {
 	// Maps to token budgets: low=2000, medium=5000, high=12000
 	ThinkingLevel *string `json:"thinking_level,omitempty"`
 
+	// ThinkingBudget explicitly sets thinking token budget (overrides ThinkingLevel)
+	// Valid range depends on model (e.g., Claude: 1024-200000)
+	ThinkingBudget *int `json:"thinking_budget,omitempty"`
+
 	// System prompt override (can also be set per turn)
 	System *string `json:"system,omitempty"`
 
@@ -76,11 +80,17 @@ type RequestParams struct {
 
 	// ===== Tool Parameters =====
 
-	// Tools available for the model to use
+	// LegacyTools - legacy OpenAI format (for backward compatibility)
+	// DEPRECATED: Use Tools field for new code
+	LegacyTools []LegacyTool `json:"legacy_tools,omitempty"`
+
+	// Tools available for the model to use (unified format)
+	// Includes built-in tools (search, text_editor, bash) and custom tools
+	// Use NewSearchTool(), NewTextEditorTool(), NewCustomTool() to create
 	Tools []Tool `json:"tools,omitempty"`
 
 	// ToolChoice controls whether/which tools to use
-	// Can be "auto", "none", or specific tool name
+	// Can be interface{} for provider-specific formats or use NewToolChoice()
 	ToolChoice interface{} `json:"tool_choice,omitempty"`
 
 	// ParallelToolCalls allows model to use multiple tools simultaneously
@@ -102,13 +112,14 @@ type ResponseFormat struct {
 	JSONSchema interface{} `json:"json_schema,omitempty"` // Schema for structured output
 }
 
-// Tool represents a function the model can call
-type Tool struct {
+// LegacyTool represents a function the model can call (OpenAI format)
+// DEPRECATED: Use Tool from tools.go for new code
+type LegacyTool struct {
 	Type     string       `json:"type"` // "function"
 	Function ToolFunction `json:"function"`
 }
 
-// ToolFunction defines a callable function
+// ToolFunction defines a callable function (legacy OpenAI format)
 type ToolFunction struct {
 	Name        string      `json:"name"`
 	Description string      `json:"description,omitempty"`
@@ -238,21 +249,13 @@ func (rp *RequestParams) GetTemperature(defaultValue float64) float64 {
 	return defaultValue
 }
 
-// GetThinkingBudgetTokens converts thinking_level to token budget
-// low = 2000, medium = 5000, high = 12000
-func (rp *RequestParams) GetThinkingBudgetTokens() int {
+// GetThinkingBudgetTokens converts thinking_level to token budget using capability registry
+// Requires provider and model to look up provider-specific budgets
+func (rp *RequestParams) GetThinkingBudgetTokens(provider, model string) (int, error) {
 	if rp.ThinkingLevel == nil {
-		return 0 // Thinking not enabled
+		return 0, nil // Thinking not enabled
 	}
 
-	switch *rp.ThinkingLevel {
-	case "low":
-		return 2000
-	case "medium":
-		return 5000
-	case "high":
-		return 12000
-	default:
-		return 0
-	}
+	registry := GetCapabilityRegistry()
+	return registry.ConvertEffortToBudget(provider, model, *rp.ThinkingLevel)
 }

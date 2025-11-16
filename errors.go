@@ -1,8 +1,25 @@
 package llmprovider
 
 import (
+	"context"
 	"errors"
 	"fmt"
+)
+
+// ErrorCode is a machine-readable error identifier
+type ErrorCode string
+
+const (
+	ErrorCodeInvalidModel        ErrorCode = "INVALID_MODEL"
+	ErrorCodeInvalidAPIKey       ErrorCode = "INVALID_API_KEY"
+	ErrorCodeRateLimited         ErrorCode = "RATE_LIMITED"
+	ErrorCodeUnsupportedFeature  ErrorCode = "UNSUPPORTED_FEATURE"
+	ErrorCodeUnsupportedTool     ErrorCode = "UNSUPPORTED_TOOL"
+	ErrorCodeToolUnavailable     ErrorCode = "TOOL_UNAVAILABLE"
+	ErrorCodeToolExecution       ErrorCode = "TOOL_EXECUTION_FAILED"
+	ErrorCodeInvalidRequest      ErrorCode = "INVALID_REQUEST"
+	ErrorCodeProviderUnavailable ErrorCode = "PROVIDER_UNAVAILABLE"
+	ErrorCodeTimeout             ErrorCode = "TIMEOUT"
 )
 
 // Sentinel errors for common failure modes.
@@ -21,19 +38,29 @@ var (
 	// Examples: extended thinking on models that don't support it, vision on text-only models.
 	ErrUnsupportedFeature = errors.New("llmprovider: unsupported feature")
 
+	// ErrUnsupportedTool indicates the requested tool is not supported by the model.
+	ErrUnsupportedTool = errors.New("llmprovider: tool not supported by model")
+
+	// ErrToolUnavailable indicates a tool temporarily unavailable (e.g., search service down).
+	ErrToolUnavailable = errors.New("llmprovider: tool temporarily unavailable")
+
 	// ErrInvalidRequest indicates the request parameters are invalid.
 	ErrInvalidRequest = errors.New("llmprovider: invalid request")
 
 	// ErrProviderUnavailable indicates the provider service is down or unreachable.
 	ErrProviderUnavailable = errors.New("llmprovider: provider unavailable")
+
+	// ErrTimeout indicates the request timed out.
+	ErrTimeout = errors.New("llmprovider: request timeout")
 )
 
 // ModelError represents an error related to model validation or availability.
 type ModelError struct {
-	Model    string // The model that was requested
-	Provider string // The provider name
-	Reason   string // Human-readable explanation
-	Err      error  // Wrapped error (usually ErrInvalidModel or ErrUnsupportedFeature)
+	Code     ErrorCode // Machine-readable error code
+	Model    string    // The model that was requested
+	Provider string    // The provider name
+	Reason   string    // Human-readable explanation
+	Err      error     // Wrapped error (usually ErrInvalidModel or ErrUnsupportedFeature)
 }
 
 func (e *ModelError) Error() string {
@@ -49,10 +76,11 @@ func (e *ModelError) Unwrap() error {
 
 // ValidationError represents an error in request parameter validation.
 type ValidationError struct {
-	Field  string // The parameter field that failed validation
-	Value  any    // The invalid value
-	Reason string // Human-readable explanation
-	Err    error  // Wrapped error (usually ErrInvalidRequest)
+	Code   ErrorCode // Machine-readable error code
+	Field  string    // The parameter field that failed validation
+	Value  any       // The invalid value
+	Reason string    // Human-readable explanation
+	Err    error     // Wrapped error (usually ErrInvalidRequest)
 }
 
 func (e *ValidationError) Error() string {
@@ -66,13 +94,33 @@ func (e *ValidationError) Unwrap() error {
 	return e.Err
 }
 
+// ToolError represents an error related to tool execution or availability.
+type ToolError struct {
+	Code      ErrorCode // Machine-readable error code
+	Tool      string    // Tool name
+	Provider  string    // Provider name
+	Model     string    // Model name
+	Reason    string    // Human-readable explanation
+	Err       error     // Wrapped sentinel error
+	Retryable bool      // Whether this error can be retried
+}
+
+func (e *ToolError) Error() string {
+	return fmt.Sprintf("tool '%s' error for model '%s' (%s): %s", e.Tool, e.Model, e.Provider, e.Reason)
+}
+
+func (e *ToolError) Unwrap() error {
+	return e.Err
+}
+
 // ProviderError represents an error from the underlying provider API.
 type ProviderError struct {
-	Provider   string // The provider name
-	StatusCode int    // HTTP status code (if applicable)
-	Message    string // Error message from provider
-	Retryable  bool   // Whether this error is potentially retryable
-	Err        error  // Wrapped sentinel error (ErrRateLimited, ErrProviderUnavailable, etc.)
+	Code       ErrorCode // Machine-readable error code
+	Provider   string    // The provider name
+	StatusCode int       // HTTP status code (if applicable)
+	Message    string    // Error message from provider
+	Retryable  bool      // Whether this error is potentially retryable
+	Err        error     // Wrapped sentinel error (ErrRateLimited, ErrProviderUnavailable, etc.)
 }
 
 func (e *ProviderError) Error() string {
@@ -86,17 +134,56 @@ func (e *ProviderError) Unwrap() error {
 	return e.Err
 }
 
+// NewProviderError creates a ProviderError and automatically determines retryability
+func NewProviderError(provider string, statusCode int, message string, err error) *ProviderError {
+	// Auto-determine retryability from status code
+	retryable := statusCode == 429 || statusCode == 502 || statusCode == 503 || statusCode == 504
+
+	// Infer error code from status
+	var code ErrorCode
+	switch statusCode {
+	case 401, 403:
+		code = ErrorCodeInvalidAPIKey
+	case 429:
+		code = ErrorCodeRateLimited
+	case 502, 503, 504:
+		code = ErrorCodeProviderUnavailable
+	default:
+		code = ErrorCodeProviderUnavailable
+	}
+
+	return &ProviderError{
+		Code:       code,
+		Provider:   provider,
+		StatusCode: statusCode,
+		Message:    message,
+		Retryable:  retryable,
+		Err:        err,
+	}
+}
+
 // IsRetryable checks if an error is potentially retryable.
-// Returns true for rate limits, temporary unavailability, network errors, etc.
+// Returns true for rate limits, temporary unavailability, network errors, timeouts, etc.
 func IsRetryable(err error) bool {
 	if err == nil {
 		return false
+	}
+
+	// Check for timeout (including context.DeadlineExceeded)
+	if errors.Is(err, ErrTimeout) || errors.Is(err, context.DeadlineExceeded) {
+		return true
 	}
 
 	// Check for ProviderError with Retryable flag
 	var providerErr *ProviderError
 	if errors.As(err, &providerErr) {
 		return providerErr.Retryable
+	}
+
+	// Check for ToolError with Retryable flag
+	var toolErr *ToolError
+	if errors.As(err, &toolErr) {
+		return toolErr.Retryable
 	}
 
 	// Rate limits are always retryable
@@ -106,6 +193,11 @@ func IsRetryable(err error) bool {
 
 	// Provider unavailable is retryable
 	if errors.Is(err, ErrProviderUnavailable) {
+		return true
+	}
+
+	// Tool temporarily unavailable is retryable
+	if errors.Is(err, ErrToolUnavailable) {
 		return true
 	}
 
@@ -128,6 +220,10 @@ func IsInvalidRequest(err error) bool {
 	}
 
 	if errors.Is(err, ErrUnsupportedFeature) {
+		return true
+	}
+
+	if errors.Is(err, ErrUnsupportedTool) {
 		return true
 	}
 

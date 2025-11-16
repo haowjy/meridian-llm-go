@@ -243,6 +243,77 @@ Using Anthropic examples will consume API credits:
 
 These examples use minimal tokens (~50-200 per run) and cost fractions of a cent.
 
+## Tool Usage Examples
+
+### Minimal Definition (Auto-Mapping)
+
+```go
+req := &llmprovider.GenerateRequest{
+    Model: "claude-haiku-4-5",
+    Messages: []llmprovider.Message{
+        {
+            Role: "user",
+            Blocks: []*llmprovider.Block{{
+                BlockType: "text",
+                TextContent: strPtr("Search for Go best practices"),
+            }},
+        },
+    },
+    Params: &llmprovider.RequestParams{
+        MaxTokens: intPtr(1024),
+        Tools: []llmprovider.Tool{
+            {Name: "web_search"},  // Auto-maps to built-in
+        },
+    },
+}
+```
+
+### Custom Tool
+
+```go
+customTool, _ := llmprovider.NewCustomTool(
+    "get_weather",
+    "Get current weather",
+    map[string]interface{}{
+        "type": "object",
+        "properties": map[string]interface{}{
+            "location": map[string]interface{}{
+                "type": "string",
+                "description": "City name",
+            },
+        },
+        "required": []string{"location"},
+    },
+)
+
+req := &llmprovider.GenerateRequest{
+    Model: "claude-haiku-4-5",
+    Messages: messages,
+    Params: &llmprovider.RequestParams{
+        MaxTokens: intPtr(1024),
+        Tools: []llmprovider.Tool{*customTool},
+    },
+}
+```
+
+### Mixed Usage
+
+```go
+customTool, _ := llmprovider.NewCustomTool("my_tool", "...", inputSchema)
+
+req := &llmprovider.GenerateRequest{
+    Params: &llmprovider.RequestParams{
+        Tools: []llmprovider.Tool{
+            {Name: "web_search"},  // Auto-maps
+            {Name: "bash"},         // Auto-maps
+            *customTool,            // Custom
+        },
+    },
+}
+```
+
+**Full guide:** [docs/tools.md](../docs/tools.md)
+
 ## Next Steps
 
 After running these examples:

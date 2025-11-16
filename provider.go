@@ -33,8 +33,8 @@ type Provider interface {
 	//   }
 	StreamResponse(ctx context.Context, req *GenerateRequest) (<-chan StreamEvent, error)
 
-	// Name returns the provider name (e.g., "anthropic", "openai", "lorem")
-	Name() string
+	// Name returns the provider identifier (e.g., ProviderAnthropic, ProviderOpenAI, ProviderLorem)
+	Name() ProviderID
 
 	// SupportsModel returns true if the provider supports the given model.
 	SupportsModel(model string) bool
