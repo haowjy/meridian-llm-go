@@ -425,17 +425,3 @@ meridian-llm-go/
 4. **Typed Errors**: Programmatic error detection for better error recovery
 5. **Minimal Dependencies**: Only official provider SDKs
 6. **Extensible**: Easy to add custom providers
-
-## Contributing
-
-Production-tested and designed for multi-LLM support in any Go application.
-
-Contributions welcome:
-- Add new providers (OpenAI, Gemini, etc.)
-- Improve type safety
-- Add validation helpers
-- Expand test coverage
-
-## License
-
-MIT
