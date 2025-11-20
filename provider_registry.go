@@ -17,6 +17,9 @@ const (
 
 	// ProviderLorem is the mock Lorem provider for testing
 	ProviderLorem ProviderID = "lorem"
+
+	// ProviderOpenRouter is OpenRouter's unified API (proxies multiple providers)
+	ProviderOpenRouter ProviderID = "openrouter"
 )
 
 // String returns the string representation of the provider ID
@@ -27,7 +30,7 @@ func (p ProviderID) String() string {
 // IsValid returns true if the provider ID is a known provider
 func (p ProviderID) IsValid() bool {
 	switch p {
-	case ProviderAnthropic, ProviderOpenAI, ProviderGoogle, ProviderLorem:
+	case ProviderAnthropic, ProviderOpenAI, ProviderGoogle, ProviderLorem, ProviderOpenRouter:
 		return true
 	default:
 		return false
