@@ -58,29 +58,25 @@ func (p *Provider) SupportsModel(model string) bool {
 	return strings.Contains(model, "/")
 }
 
-// validateWebSearchRequirements checks if web_search tool is used with :online suffix.
-// OpenRouter models require :online suffix to enable web search capability.
+// validateWebSearchRequirements blocks web_search tool usage with OpenRouter.
+// OpenRouter's built-in search is not suitable for our use case.
+//
+// TODO(search): Implement custom web search tool that works across all providers.
+// Once implemented, remove this block and allow web_search with OpenRouter.
 func (p *Provider) validateWebSearchRequirements(req *llmprovider.GenerateRequest) error {
 	// Check if request includes web_search tool
 	if req.Params == nil || len(req.Params.Tools) == 0 {
 		return nil
 	}
 
-	hasWebSearch := false
 	for _, tool := range req.Params.Tools {
 		if tool.Function.Name == "search" || tool.Function.Name == "web_search" {
-			hasWebSearch = true
-			break
-		}
-	}
-
-	// If web_search tool is present, model must have :online suffix
-	if hasWebSearch && !strings.HasSuffix(req.Model, ":online") {
-		return &llmprovider.ModelError{
-			Model:    req.Model,
-			Provider: p.Name().String(),
-			Reason:   fmt.Sprintf("web_search tool requires ':online' suffix - use '%s:online' to enable web search", req.Model),
-			Err:      llmprovider.ErrInvalidModel,
+			return &llmprovider.ModelError{
+				Model:    req.Model,
+				Provider: p.Name().String(),
+				Reason:   "web_search is not yet supported with OpenRouter - custom implementation pending. Use Anthropic provider for web search, or use other tools (doc_search, doc_view, doc_tree).",
+				Err:      llmprovider.ErrInvalidModel,
+			}
 		}
 	}
 

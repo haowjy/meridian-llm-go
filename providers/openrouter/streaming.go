@@ -19,6 +19,7 @@ type ChatCompletionChunk struct {
 	Created int64         `json:"created"`
 	Model   string        `json:"model"`
 	Choices []ChunkChoice `json:"choices"`
+	Usage   *Usage        `json:"usage,omitempty"` // Token usage (only in last chunk)
 }
 
 // ChunkChoice represents a choice in a streaming chunk.
@@ -54,6 +55,7 @@ func emitStreamingBlocks(
 
 	// 1. Emit web search blocks (if present and not done)
 	if parsed.WebSearch != nil && !state.WebSearchDone {
+		fmt.Printf("[DEBUG] processing web search annotations: state.CurrentIndex=%d\n", state.CurrentIndex)
 		blocks, err := convertAnnotationsToWebSearchBlocks(
 			parsed.WebSearch.Annotations,
 			state.CurrentIndex,
@@ -62,12 +64,17 @@ func emitStreamingBlocks(
 			return err
 		}
 
-		for _, block := range blocks {
+		fmt.Printf("[DEBUG] emitting %d web search blocks\n", len(blocks))
+		for i, block := range blocks {
+			fmt.Printf("[DEBUG]   web search block %d: type=%s, sequence=%d\n", i, block.BlockType, block.Sequence)
 			eventChan <- llmprovider.StreamEvent{Block: block}
 		}
 
+		oldIndex := state.CurrentIndex
 		state.CurrentIndex += len(blocks)
 		state.WebSearchDone = true
+		fmt.Printf("[DEBUG] updated state.CurrentIndex: %d -> %d (added %d web search blocks)\n",
+			oldIndex, state.CurrentIndex, len(blocks))
 	}
 
 	// 2. Close previous block if transition says so (emit complete block for persistence)
@@ -217,6 +224,7 @@ func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventCh
 	toolCallsMap := make(map[int]*accumulatedToolCall) // index -> accumulated tool call
 	var model string
 	var stopReason string
+	var usage *Usage // Token usage (captured from last chunk)
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -267,6 +275,11 @@ func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventCh
 			model = chunk.Model
 		}
 
+		// Capture usage (typically only in last chunk)
+		if chunk.Usage != nil {
+			usage = chunk.Usage
+		}
+
 		// Parse delta using SOLID-compliant functions
 		parsed := parseDelta(
 			delta.Annotations,
@@ -286,10 +299,34 @@ func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventCh
 		// Process tool calls delta (keep existing logic - tool calls need accumulation)
 		if len(delta.ToolCalls) > 0 {
 			for _, toolCallDelta := range delta.ToolCalls {
-				// Get or create accumulated tool call
-				idx := len(toolCallsMap)
-				if existingIdx, exists := findToolCallIndex(toolCallsMap, toolCallDelta.ID); exists {
+				// DEBUG: Print each tool call delta with actual index from OpenRouter
+				var indexFromOR string
+				if toolCallDelta.Index != nil {
+					indexFromOR = fmt.Sprintf("%d", *toolCallDelta.Index)
+				} else {
+					indexFromOR = "nil"
+				}
+				fmt.Printf("[DEBUG] processing tool call delta: openrouter_index=%s, id=%q, name=%q, args_len=%d, args_preview=%q\n",
+					indexFromOR, toolCallDelta.ID, toolCallDelta.Function.Name,
+					len(toolCallDelta.Function.Arguments), truncateString(toolCallDelta.Function.Arguments, 50))
+
+				// Determine the map index to use (priority order):
+				// 1. Use Index from OpenRouter if present (most reliable)
+				// 2. Find existing entry by ID
+				// 3. Create new entry at next available index
+				var idx int
+				if toolCallDelta.Index != nil {
+					// Use actual index from OpenRouter response
+					idx = *toolCallDelta.Index
+					fmt.Printf("[DEBUG] using OpenRouter index: %d\n", idx)
+				} else if existingIdx, exists := findToolCallIndex(toolCallsMap, toolCallDelta.ID); exists {
+					// Find existing by ID
 					idx = existingIdx
+					fmt.Printf("[DEBUG] found existing tool call by ID: id=%q, map_index=%d\n", toolCallDelta.ID, idx)
+				} else {
+					// Fallback: create new entry
+					idx = len(toolCallsMap)
+					fmt.Printf("[DEBUG] creating new tool call entry (fallback): id=%q, map_index=%d\n", toolCallDelta.ID, idx)
 				}
 
 				acc, exists := toolCallsMap[idx]
@@ -300,6 +337,8 @@ func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventCh
 
 					blockType := llmprovider.BlockTypeToolUse
 					blockIndex := state.CurrentIndex + 1 + idx
+					fmt.Printf("[DEBUG] emitting tool call START: map_index=%d, blockIndex=%d, state.CurrentIndex=%d, id=%q, name=%q\n",
+						idx, blockIndex, state.CurrentIndex, toolCallDelta.ID, toolCallDelta.Function.Name)
 					eventChan <- llmprovider.StreamEvent{
 						Delta: &llmprovider.BlockDelta{
 							BlockIndex:   blockIndex,
@@ -319,7 +358,13 @@ func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventCh
 					acc.Name = toolCallDelta.Function.Name
 				}
 				if toolCallDelta.Function.Arguments != "" {
+					prevLength := acc.Arguments.Len()
 					acc.Arguments.WriteString(toolCallDelta.Function.Arguments)
+					newLength := acc.Arguments.Len()
+
+					// DEBUG: Print Arguments accumulation
+					fmt.Printf("[DEBUG] accumulated tool call arguments: id=%q, map_index=%d, prev_len=%d, chunk_len=%d, new_total=%d, preview=%q\n",
+						acc.ID, idx, prevLength, len(toolCallDelta.Function.Arguments), newLength, truncateString(acc.Arguments.String(), 100))
 
 					// Emit input JSON delta
 					blockIndex := state.CurrentIndex + 1 + idx
@@ -378,19 +423,38 @@ func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventCh
 	}
 
 	// Tool call blocks (emit in order)
+	// DEBUG: Print toolCallsMap state before finalization
+	fmt.Printf("[DEBUG] finalizing tool calls: total=%d, state.CurrentIndex=%d\n", len(toolCallsMap), state.CurrentIndex)
+
+	// DEBUG: Dump entire toolCallsMap to see what indices exist
+	fmt.Printf("[DEBUG] toolCallsMap contents:\n")
+	for mapIdx, mapAcc := range toolCallsMap {
+		fmt.Printf("[DEBUG]   index=%d: id=%q, name=%q, args_len=%d\n",
+			mapIdx, mapAcc.ID, mapAcc.Name, mapAcc.Arguments.Len())
+	}
+
 	for idx := 0; idx < len(toolCallsMap); idx++ {
 		acc, exists := toolCallsMap[idx]
 		if !exists {
+			fmt.Printf("[DEBUG] WARNING: gap in toolCallsMap at index %d (this should not happen!)\n", idx)
 			continue
 		}
+
+		// DEBUG: Print accumulated tool call before JSON parsing
+		argStr := acc.Arguments.String()
+		fmt.Printf("[DEBUG] parsing accumulated tool call arguments: index=%d, id=%q, name=%q, args_len=%d, args_full=%q\n",
+			idx, acc.ID, acc.Name, acc.Arguments.Len(), argStr)
 
 		// Parse accumulated arguments
 		input := make(map[string]interface{})
 		if acc.Arguments.Len() > 0 {
-			argStr := acc.Arguments.String()
 			if err := json.Unmarshal([]byte(argStr), &input); err != nil {
+				fmt.Printf("[ERROR] failed to parse tool call arguments: index=%d, id=%q, name=%q, malformed_json=%q, error=%v\n",
+					idx, acc.ID, acc.Name, argStr, err)
 				return fmt.Errorf("invalid tool call arguments at index %d: received malformed JSON %q - %w", idx, argStr, err)
 			}
+			fmt.Printf("[DEBUG] successfully parsed tool call arguments: index=%d, id=%q, name=%q, parsed_input=%v\n",
+				idx, acc.ID, acc.Name, input)
 		}
 
 		content := map[string]interface{}{
@@ -411,13 +475,20 @@ func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventCh
 	}
 
 	// Emit final metadata
+	metadata := &llmprovider.StreamMetadata{
+		Model:      model,
+		StopReason: stopReason,
+	}
+
+	// Extract token usage if available (typically in last chunk)
+	if usage != nil {
+		metadata.InputTokens = usage.PromptTokens
+		metadata.OutputTokens = usage.CompletionTokens
+	}
+	// Note: If usage is nil, InputTokens and OutputTokens default to 0
+
 	eventChan <- llmprovider.StreamEvent{
-		Metadata: &llmprovider.StreamMetadata{
-			Model:      model,
-			StopReason: stopReason,
-			// Note: OpenRouter doesn't always include usage in streaming
-			// InputTokens and OutputTokens may be 0
-		},
+		Metadata: metadata,
 	}
 
 	return nil
@@ -441,4 +512,16 @@ func findToolCallIndex(toolCallsMap map[int]*accumulatedToolCall, id string) (in
 		}
 	}
 	return 0, false
+}
+
+// truncateString truncates a string to maxLen characters, adding "..." if truncated.
+// Used for debug logging to prevent excessive log output.
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	if maxLen <= 3 {
+		return "..."
+	}
+	return s[:maxLen-3] + "..."
 }

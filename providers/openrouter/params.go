@@ -1,6 +1,7 @@
 package openrouter
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/haowjy/meridian-llm-go"
@@ -48,6 +49,7 @@ type ImageURL struct {
 
 // ToolCall represents a function call in assistant messages.
 type ToolCall struct {
+	Index    *int         `json:"index,omitempty"` // Streaming only - index of this tool call in the array
 	ID       string       `json:"id"`
 	Type     string       `json:"type"` // "function"
 	Function FunctionCall `json:"function"`
@@ -189,6 +191,33 @@ func buildChatCompletionRequest(req *llmprovider.GenerateRequest) (*ChatCompleti
 	}
 
 	return openrouterReq, nil
+}
+
+// BuildChatCompletionRequestDebug builds the OpenRouter request payload for debugging.
+// It converts the library GenerateRequest to OpenRouter's ChatCompletionRequest format
+// and returns it as a map[string]interface{} for inspection.
+//
+// This is used by debug endpoints to show the exact JSON that would be sent to OpenRouter's API.
+func BuildChatCompletionRequestDebug(req *llmprovider.GenerateRequest) (map[string]interface{}, error) {
+	// Build the ChatCompletionRequest using the same logic as GenerateResponse
+	chatReq, err := buildChatCompletionRequest(req)
+	if err != nil {
+		return nil, err
+	}
+
+	// Marshal to JSON using OpenRouter's struct tags (which use "parameters" not "input_schema")
+	jsonBytes, err := json.Marshal(chatReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal openrouter request: %w", err)
+	}
+
+	// Unmarshal back into a map for flexible inspection
+	var result map[string]interface{}
+	if err := json.Unmarshal(jsonBytes, &result); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal openrouter request: %w", err)
+	}
+
+	return result, nil
 }
 
 // convertToolChoice converts library tool choice to OpenRouter format.

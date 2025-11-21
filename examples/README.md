@@ -18,6 +18,9 @@ make run-anthropic-basic      # Simple Claude response
 make run-anthropic-streaming  # Real-time streaming
 make run-anthropic-thinking   # Extended thinking mode
 
+# Test with OpenRouter API (requires OPENROUTER_API_KEY)
+make run-openrouter-streaming # Thinking block streaming
+
 # Build all examples as binaries
 make examples
 
@@ -78,6 +81,7 @@ go run examples/anthropic-basic/main.go
 | `anthropic-basic` | Anthropic | ❌ | ✅ | Simple Claude response |
 | `anthropic-streaming` | Anthropic | ✅ | ✅ | Real-time Claude streaming |
 | `anthropic-thinking` | Anthropic | ✅ | ✅ | Extended thinking mode demo |
+| `openrouter-streaming` | OpenRouter | ✅ | ✅ | Thinking block streaming |
 
 ## Example Details
 
@@ -183,6 +187,38 @@ Based on the clues:
 - Bob's favorite is not blue, so Bob likes red
 ---
 ```
+
+### openrouter-streaming
+
+**Purpose:** Demonstrate OpenRouter streaming with thinking blocks
+**Model:** `moonshotai/kimi-k2-thinking`
+**Shows:** Thinking blocks, real-time streaming
+
+```bash
+export OPENROUTER_API_KEY="sk-or-..."
+go run examples/openrouter-streaming/main.go
+```
+
+**Expected output:**
+```
+🧠 THINKING:
+---
+The user is asking about goroutines vs threads. Let me think through the key differences...
+---
+
+💬 RESPONSE:
+---
+Go's goroutines offer several key benefits compared to traditional threads...
+---
+
+✓ Streaming complete
+  Model: moonshotai/kimi-k2-thinking
+  Input tokens: 50
+  Output tokens: 250
+  Stop reason: stop
+```
+
+**Note:** `web_search` is currently not supported with OpenRouter pending custom implementation. The example demonstrates thinking blocks without tool usage.
 
 ## Troubleshooting
 
