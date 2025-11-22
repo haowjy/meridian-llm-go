@@ -236,9 +236,9 @@ func transformAnthropicStreamEvent(event anthropic.MessageStreamEventUnion, mess
 			delta.SignatureDelta = &sig
 
 		case "input_json_delta":
-			delta.DeltaType = llmprovider.DeltaTypeInputJSON
+			delta.DeltaType = llmprovider.DeltaTypeJSON
 			jsonDelta := e.Delta.PartialJSON
-			delta.InputJSONDelta = &jsonDelta
+			delta.JSONDelta = &jsonDelta
 		}
 
 		return llmprovider.StreamEvent{Delta: delta}

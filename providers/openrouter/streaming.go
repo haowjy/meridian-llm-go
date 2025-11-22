@@ -370,9 +370,9 @@ func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventCh
 					blockIndex := state.CurrentIndex + 1 + idx
 					eventChan <- llmprovider.StreamEvent{
 						Delta: &llmprovider.BlockDelta{
-							BlockIndex:     blockIndex,
-							DeltaType:      llmprovider.DeltaTypeInputJSON,
-							InputJSONDelta: &toolCallDelta.Function.Arguments,
+							BlockIndex:  blockIndex,
+							DeltaType:   llmprovider.DeltaTypeJSON,
+							JSONDelta:   &toolCallDelta.Function.Arguments,
 						},
 					}
 				}
@@ -463,12 +463,16 @@ func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventCh
 			"input":       input,
 		}
 
+		// All OpenRouter tools are client-side (executed by backend)
+		executionSide := llmprovider.ExecutionSideClient
+
 		eventChan <- llmprovider.StreamEvent{
 			Block: &llmprovider.Block{
-				BlockType: llmprovider.BlockTypeToolUse,
-				Sequence:  state.CurrentIndex,
-				Content:   content,
-				Provider:  &providerIDStr,
+				BlockType:     llmprovider.BlockTypeToolUse,
+				Sequence:      state.CurrentIndex,
+				Content:       content,
+				ExecutionSide: &executionSide,
+				Provider:      &providerIDStr,
 			},
 		}
 		state.CurrentIndex++

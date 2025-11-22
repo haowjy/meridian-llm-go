@@ -266,12 +266,31 @@ func convertMessageToOpenRouter(msg llmprovider.Message, msgIndex int) ([]Messag
 			return nil, fmt.Errorf("message %d, block %d: tool_result block missing tool_use_id", msgIndex, j)
 		}
 
-		// Extract result content
+		// Extract result content (priority order):
+		// 1. TextContent field (if set)
+		// 2. Content["content"] string (if set)
+		// 3. Content["result"] (any type - backend applies formatters for filtering/transformation)
+		// 4. Content["error"] (error message string)
+		// Note: Backend formatters can return any type (string, map, filtered data, etc.)
+		// If Content["result"] is not already a string, it should be JSON-marshaled for API transmission
 		var resultContent string
 		if block.TextContent != nil {
 			resultContent = *block.TextContent
 		} else if contentStr, ok := block.Content["content"].(string); ok {
 			resultContent = contentStr
+		} else if resultStr, ok := block.Content["result"].(string); ok {
+			// If result is already a string (from formatter or prior serialization), use directly
+			// Only include non-error results
+			isError := false
+			if errFlag, ok := block.Content["is_error"].(bool); ok {
+				isError = errFlag
+			}
+			if !isError {
+				resultContent = resultStr
+			}
+		} else if errMsg, ok := block.Content["error"].(string); ok {
+			// Error message string
+			resultContent = errMsg
 		}
 
 		// Create tool message
@@ -459,10 +478,14 @@ func convertToolCallToBlock(toolCall ToolCall, sequence int) (*llmprovider.Block
 		"input":       input,
 	}
 
+	// All OpenRouter tools are client-side (executed by backend)
+	executionSide := llmprovider.ExecutionSideClient
+
 	return &llmprovider.Block{
-		BlockType: llmprovider.BlockTypeToolUse,
-		Sequence:  sequence,
-		Content:   content,
+		BlockType:     llmprovider.BlockTypeToolUse,
+		Sequence:      sequence,
+		Content:       content,
+		ExecutionSide: &executionSide,
 	}, nil
 }
 

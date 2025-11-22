@@ -93,12 +93,24 @@ func convertToAnthropicMessages(messages []llmprovider.Message) ([]anthropic.Mes
 					isError = errFlag
 				}
 
-				// Tool result content can be in TextContent or Content["content"]
+				// Tool result content can be in multiple fields (priority order):
+				// 1. TextContent field (if set)
+				// 2. Content["content"] string (if set)
+				// 3. Content["result"] (any type - backend applies formatters for filtering/transformation)
+				// 4. Content["error"] (error message string)
+				// Note: Backend formatters can return any type (string, map, filtered data, etc.)
+				// If Content["result"] is not already a string, it should be JSON-marshaled for API transmission
 				var resultContent string
 				if block.TextContent != nil {
 					resultContent = *block.TextContent
 				} else if contentStr, ok := block.Content["content"].(string); ok {
 					resultContent = contentStr
+				} else if resultStr, ok := block.Content["result"].(string); ok && !isError {
+					// If result is already a string (from formatter or prior serialization), use directly
+					resultContent = resultStr
+				} else if errMsg, ok := block.Content["error"].(string); ok && isError {
+					// Error message string
+					resultContent = errMsg
 				}
 
 				// Create Anthropic tool result block using SDK helper

@@ -394,9 +394,9 @@ func (p *Provider) streamToolUseBlock(ctx context.Context, eventChan chan<- llmp
 		delta := string(char)
 		eventChan <- llmprovider.StreamEvent{
 			Delta: &llmprovider.BlockDelta{
-				BlockIndex:     blockIndex,
-				DeltaType:      llmprovider.DeltaTypeInputJSONDelta,
-				InputJSONDelta: &delta,
+				BlockIndex: blockIndex,
+				DeltaType:  llmprovider.DeltaTypeJSON,
+				JSONDelta:  &delta,
 			},
 		}
 
@@ -577,9 +577,9 @@ func (p *Provider) streamToolUseBlockFromBuiltIn(ctx context.Context, eventChan 
 		delta := string(char)
 		eventChan <- llmprovider.StreamEvent{
 			Delta: &llmprovider.BlockDelta{
-				BlockIndex:     blockIndex,
-				DeltaType:      llmprovider.DeltaTypeInputJSONDelta,
-				InputJSONDelta: &delta,
+				BlockIndex: blockIndex,
+				DeltaType:  llmprovider.DeltaTypeJSON,
+				JSONDelta:  &delta,
 			},
 		}
 
