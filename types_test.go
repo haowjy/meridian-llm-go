@@ -140,7 +140,7 @@ func TestDeltaTypes_Constants(t *testing.T) {
 	// Verify delta type constants
 	expectedTypes := map[string]string{
 		"DeltaTypeTextDelta":      "text_delta",
-		"DeltaTypeInputJSONDelta": "input_json_delta",
+		"DeltaTypeInputJSONDelta": "json_delta", // DEPRECATED: now aliases DeltaTypeJSON
 	}
 
 	actualTypes := map[string]string{

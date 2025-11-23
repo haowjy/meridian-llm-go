@@ -65,7 +65,7 @@ func buildMessageParams(req *llmprovider.GenerateRequest) (anthropic.MessageNewP
 
 	// Thinking mode - convert user-friendly level to token budget
 	if params.ThinkingEnabled != nil && *params.ThinkingEnabled {
-		budgetTokens, err := params.GetThinkingBudgetTokens("anthropic", req.Model)
+		budgetTokens, err := params.GetThinkingBudgetTokens()
 		if err != nil {
 			return anthropic.MessageNewParams{}, fmt.Errorf("failed to get thinking budget: %w", err)
 		}

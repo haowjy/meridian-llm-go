@@ -249,13 +249,28 @@ func (rp *RequestParams) GetTemperature(defaultValue float64) float64 {
 	return defaultValue
 }
 
-// GetThinkingBudgetTokens converts thinking_level to token budget using capability registry
-// Requires provider and model to look up provider-specific budgets
-func (rp *RequestParams) GetThinkingBudgetTokens(provider, model string) (int, error) {
+// GetThinkingBudgetTokens converts thinking_level to token budget using default budgets
+func (rp *RequestParams) GetThinkingBudgetTokens() (int, error) {
 	if rp.ThinkingLevel == nil {
 		return 0, nil // Thinking not enabled
 	}
 
-	registry := GetCapabilityRegistry()
-	return registry.ConvertEffortToBudget(provider, model, *rp.ThinkingLevel)
+	return ConvertEffortToBudget(*rp.ThinkingLevel)
+}
+
+// ConvertEffortToBudget converts effort level to token budget
+// Uses standard default budgets across all providers
+func ConvertEffortToBudget(effort string) (int, error) {
+	budgets := map[string]int{
+		"low":    2000,
+		"medium": 5000,
+		"high":   12000,
+	}
+
+	budget, ok := budgets[effort]
+	if !ok {
+		return 0, fmt.Errorf("unknown effort level: %s (valid: low, medium, high)", effort)
+	}
+
+	return budget, nil
 }

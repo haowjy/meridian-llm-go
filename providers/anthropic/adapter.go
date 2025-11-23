@@ -3,11 +3,21 @@ package anthropic
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 
 	"github.com/anthropics/anthropic-sdk-go"
 
 	"github.com/haowjy/meridian-llm-go"
 )
+
+var invalidToolIDChars = regexp.MustCompile(`[^a-zA-Z0-9_-]`)
+
+// sanitizeToolUseID sanitizes tool call IDs to match Anthropic's required pattern: ^[a-zA-Z0-9_-]+$
+// OpenRouter and other providers may generate IDs with spaces, periods, colons, etc.
+// This function replaces invalid characters with underscores.
+func sanitizeToolUseID(id string) string {
+	return invalidToolIDChars.ReplaceAllString(id, "_")
+}
 
 // convertToAnthropicMessages converts library messages to Anthropic SDK format.
 func convertToAnthropicMessages(messages []llmprovider.Message) ([]anthropic.MessageParam, error) {
@@ -63,6 +73,11 @@ func convertToAnthropicMessages(messages []llmprovider.Message) ([]anthropic.Mes
 					return nil, fmt.Errorf("message %d, block %d: tool_use block missing tool_use_id", i, j)
 				}
 
+				// Sanitize tool_use_id for Anthropic compatibility
+				// OpenRouter and other providers may use IDs with spaces, periods, colons, etc.
+				// Anthropic requires: ^[a-zA-Z0-9_-]+$
+				toolUseID = sanitizeToolUseID(toolUseID)
+
 				toolName, ok := block.Content["tool_name"].(string)
 				if !ok || toolName == "" {
 					return nil, fmt.Errorf("message %d, block %d: tool_use block missing tool_name", i, j)
@@ -86,6 +101,12 @@ func convertToAnthropicMessages(messages []llmprovider.Message) ([]anthropic.Mes
 				if !ok || toolUseID == "" {
 					return nil, fmt.Errorf("message %d, block %d: tool_result block missing tool_use_id", i, j)
 				}
+
+				// Sanitize tool_use_id for Anthropic compatibility
+				// Must match the sanitized ID from the corresponding tool_use block
+				// OpenRouter and other providers may use IDs with spaces, periods, colons, etc.
+				// Anthropic requires: ^[a-zA-Z0-9_-]+$
+				toolUseID = sanitizeToolUseID(toolUseID)
 
 				// Check if this is an error result
 				isError := false
