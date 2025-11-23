@@ -28,9 +28,20 @@ func convertToAnthropicMessages(messages []llmprovider.Message) ([]anthropic.Mes
 		return nil, fmt.Errorf("failed to process cross-provider tools: %w", err)
 	}
 
-	result := make([]anthropic.MessageParam, 0, len(processedMessages))
+	// Phase 2: Split assistant messages at tool_result boundaries
+	// Backend uses naive message building (one message per turn with all blocks).
+	// For Anthropic, we need to split assistant turns at each tool_result boundary
+	// to create proper alternation: [assistant, user, assistant, user, ...]
+	splitMessages := splitMessagesAtToolResults(processedMessages)
 
-	for i, msg := range processedMessages {
+	// Phase 3: Merge consecutive same-role messages (Anthropic API requirement)
+	// Defense-in-depth: After splitting, when a new user turn follows a tool_result,
+	// we get consecutive user messages that must be merged for proper alternation
+	mergedMessages := mergeConsecutiveSameRoleMessages(splitMessages)
+
+	result := make([]anthropic.MessageParam, 0, len(mergedMessages))
+
+	for i, msg := range mergedMessages {
 		// Convert blocks to Anthropic ContentBlockParamUnion
 		blocks := make([]anthropic.ContentBlockParamUnion, 0, len(msg.Blocks))
 
@@ -154,7 +165,17 @@ func convertToAnthropicMessages(messages []llmprovider.Message) ([]anthropic.Mes
 					}
 				}
 
-				// Create Anthropic thinking block using SDK helper
+				// Cross-provider thinking block handling:
+				// Non-Anthropic providers (OpenRouter, etc.) don't provide cryptographic signatures.
+				// Convert these to text blocks wrapped in <thinking> tags for semantic preservation.
+				// This prevents 400 errors from Anthropic API rejecting empty signatures.
+				if signature == "" {
+					wrappedText := fmt.Sprintf("<thinking>\n%s\n</thinking>", *block.TextContent)
+					blocks = append(blocks, anthropic.NewTextBlock(wrappedText))
+					continue
+				}
+
+				// Native Anthropic thinking block with signature
 				blocks = append(blocks, anthropic.NewThinkingBlock(signature, *block.TextContent))
 
 			case llmprovider.BlockTypeWebSearch, llmprovider.BlockTypeWebSearchResult:
@@ -199,6 +220,108 @@ func convertToAnthropicMessages(messages []llmprovider.Message) ([]anthropic.Mes
 	}
 
 	return result, nil
+}
+
+// splitMessagesAtToolResults splits assistant messages at each tool_result boundary
+// to create proper alternating assistant/user pairs (required by Anthropic API).
+//
+// Example transformation:
+//   Input:  [Msg(assistant, [thinking, text, tool_use, tool_result, thinking, tool_use, tool_result])]
+//   Output: [
+//     Msg(assistant, [thinking, text, tool_use]),
+//     Msg(user, [tool_result]),
+//     Msg(assistant, [thinking, tool_use]),
+//     Msg(user, [tool_result])
+//   ]
+//
+// Rationale:
+//   After tool continuation, backend creates assistant turns containing blocks from
+//   multiple rounds (tool_use + tool_result + tool_use + tool_result).
+//   Backend now uses naive message building (one message per turn) and delegates
+//   provider-specific conversion to the library. This function handles Anthropic's
+//   requirement that each tool_use must be immediately followed by a user message
+//   containing the corresponding tool_result.
+func splitMessagesAtToolResults(messages []llmprovider.Message) []llmprovider.Message {
+	result := make([]llmprovider.Message, 0, len(messages))
+
+	for _, msg := range messages {
+		if msg.Role != "assistant" {
+			// User messages pass through unchanged
+			result = append(result, msg)
+			continue
+		}
+
+		// Split assistant messages at tool_result boundaries
+		var currentBlocks []*llmprovider.Block
+
+		for _, block := range msg.Blocks {
+			if block.BlockType == llmprovider.BlockTypeToolResult {
+				// Emit accumulated assistant blocks (if any)
+				if len(currentBlocks) > 0 {
+					result = append(result, llmprovider.Message{
+						Role:   "assistant",
+						Blocks: currentBlocks,
+					})
+					currentBlocks = nil
+				}
+
+				// Emit tool_result as user message
+				result = append(result, llmprovider.Message{
+					Role:   "user",
+					Blocks: []*llmprovider.Block{block},
+				})
+			} else {
+				// Accumulate assistant blocks (thinking, text, tool_use, etc.)
+				currentBlocks = append(currentBlocks, block)
+			}
+		}
+
+		// Emit remaining assistant blocks (if any)
+		if len(currentBlocks) > 0 {
+			result = append(result, llmprovider.Message{
+				Role:   "assistant",
+				Blocks: currentBlocks,
+			})
+		}
+	}
+
+	return result
+}
+
+// mergeConsecutiveSameRoleMessages combines consecutive messages with the same role.
+// This ensures messages alternate between user/assistant (required by Anthropic API).
+//
+// Example transformation:
+//   Before: [user (tool_result), user (text)]
+//   After:  [user (tool_result, text)]
+//
+// Rationale:
+//   Defense-in-depth for message alternation. After splitMessagesAtToolResults(),
+//   when a new user turn follows a tool_result, we get consecutive user messages
+//   that must be merged: [user (last tool_result), user (new text)] → [user (tool_result, text)]
+func mergeConsecutiveSameRoleMessages(messages []llmprovider.Message) []llmprovider.Message {
+	if len(messages) <= 1 {
+		return messages
+	}
+
+	merged := make([]llmprovider.Message, 0, len(messages))
+	current := messages[0]
+
+	for i := 1; i < len(messages); i++ {
+		if messages[i].Role == current.Role {
+			// Same role - merge blocks from next message into current
+			current.Blocks = append(current.Blocks, messages[i].Blocks...)
+		} else {
+			// Different role - save current and start new
+			merged = append(merged, current)
+			current = messages[i]
+		}
+	}
+
+	// Append final message
+	merged = append(merged, current)
+
+	return merged
 }
 
 // replayAnthropicBlock attempts to deserialize ProviderData and reconstruct the exact
