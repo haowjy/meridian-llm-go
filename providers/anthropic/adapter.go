@@ -56,13 +56,13 @@ func convertToAnthropicMessages(messages []llmprovider.Message) ([]anthropic.Mes
 				// Fall through to normalized conversion if replay fails
 			}
 
-			// Cross-provider check: Server tools from other providers should have been split
+			// Cross-provider check: Provider-side tools from other providers should have been split
 			if block.BlockType == llmprovider.BlockTypeToolUse &&
 				block.ExecutionSide != nil &&
-				*block.ExecutionSide == llmprovider.ExecutionSideServer &&
+				*block.ExecutionSide == llmprovider.ExecutionSideProvider &&
 				block.IsFromDifferentProvider(llmprovider.ProviderAnthropic) {
-				// Cross-provider server tools should have been handled by SplitMessagesAtCrossProviderTool
-				return nil, fmt.Errorf("message %d, block %d: unexpected cross-provider server tool (should have been split)", i, j)
+				// Cross-provider provider-side tools should have been handled by SplitMessagesAtCrossProviderTool
+				return nil, fmt.Errorf("message %d, block %d: unexpected cross-provider provider-side tool (should have been split)", i, j)
 			}
 
 			switch block.BlockType {
@@ -570,11 +570,11 @@ func convertAnthropicBlock(content anthropic.ContentBlockUnion, sequence int) (*
 		contentMap["input"] = content.Input
 
 		// Determine execution side based on tool type
-		// Server-side tools: web_search (results included automatically)
-		// Client-side tools: bash, text_editor, custom (consumer must execute)
-		executionSide := llmprovider.ExecutionSideClient
+		// Provider-side tools: web_search (Anthropic executes, results included automatically)
+		// Backend-side tools: bash, text_editor, custom (our backend must execute)
+		executionSide := llmprovider.ExecutionSideServer
 		if content.Name == "web_search" {
-			executionSide = llmprovider.ExecutionSideServer
+			executionSide = llmprovider.ExecutionSideProvider
 		}
 
 		return &llmprovider.Block{
@@ -609,12 +609,12 @@ func convertAnthropicBlock(content anthropic.ContentBlockUnion, sequence int) (*
 			contentMap["tool_name"] = content.Name
 			contentMap["input"] = content.Input
 
-			executionSide := llmprovider.ExecutionSideServer
+			executionSide := llmprovider.ExecutionSideProvider
 
 			// Determine block type based on tool name.
-			// web_search → BlockTypeWebSearch (invocation, LLM request, server-executed)
-			// Other server tools use generic BlockTypeToolUse.
-			blockType := llmprovider.BlockTypeToolUse // Default for server tools
+			// web_search → BlockTypeWebSearch (invocation, LLM request, provider-executed)
+			// Other provider-side tools use generic BlockTypeToolUse.
+			blockType := llmprovider.BlockTypeToolUse // Default for provider-side tools
 			if content.Name == "web_search" {
 				blockType = llmprovider.BlockTypeWebSearch
 			}

@@ -27,8 +27,9 @@ const (
 type ExecutionSide string
 
 const (
-	ExecutionSideServer ExecutionSide = "server" // Provider executes tool
-	ExecutionSideClient ExecutionSide = "client" // Consumer executes tool
+	ExecutionSideProvider ExecutionSide = "provider" // LLM provider executes (e.g., Anthropic's built-in web_search)
+	ExecutionSideServer   ExecutionSide = "server"   // Our backend executes (e.g., Tavily web search, bash, custom tools)
+	ExecutionSideClient   ExecutionSide = "client"   // Frontend executes (future use, rarely used)
 )
 
 // ToolChoiceMode controls tool selection behavior
@@ -55,8 +56,9 @@ type FunctionDetails struct {
 //   - Anthropic: Flatten and rename (parameters → input_schema)
 //   - Gemini: Flatten and rename (parameters → parameters_json_schema)
 type Tool struct {
-	Type     string           `json:"type"`     // Always "function" for function tools
-	Function FunctionDetails  `json:"function"` // Function definition
+	Type          string           `json:"type"`     // Always "function" for function tools
+	Function      FunctionDetails  `json:"function"` // Function definition
+	ExecutionSide ExecutionSide    `json:"-"`        // Where tool is executed (not sent to API), defaults to Server (backend)
 }
 
 // Validate checks if the Tool is properly configured

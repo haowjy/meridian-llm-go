@@ -463,8 +463,8 @@ func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventCh
 			"input":       input,
 		}
 
-		// All OpenRouter tools are client-side (executed by backend)
-		executionSide := llmprovider.ExecutionSideClient
+		// All OpenRouter tools are backend-side (executed by our backend)
+		executionSide := llmprovider.ExecutionSideServer
 
 		eventChan <- llmprovider.StreamEvent{
 			Block: &llmprovider.Block{

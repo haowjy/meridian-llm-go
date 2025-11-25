@@ -27,6 +27,7 @@ func NewSearchTool() (*Tool, error) {
 				"required": []string{"query"},
 			},
 		},
+		ExecutionSide: ExecutionSideProvider, // Provider executes (e.g., Anthropic's built-in web_search)
 	}
 
 	if err := tool.Validate(); err != nil {
@@ -37,13 +38,13 @@ func NewSearchTool() (*Tool, error) {
 }
 
 // NewTextEditorTool creates a text editor tool (OpenAI format).
-// This is a client-side tool for editing files.
+// This is a backend-side tool for editing files (executed by our backend).
 func NewTextEditorTool() (*Tool, error) {
 	tool := &Tool{
 		Type: "function",
 		Function: FunctionDetails{
 			Name:        "text_editor",
-			Description: "Edit text files (client-side execution)",
+			Description: "Edit text files (backend execution)",
 			Parameters: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -59,6 +60,7 @@ func NewTextEditorTool() (*Tool, error) {
 				"required": []string{"path", "command"},
 			},
 		},
+		ExecutionSide: ExecutionSideServer, // Backend executes
 	}
 
 	if err := tool.Validate(); err != nil {
@@ -69,13 +71,13 @@ func NewTextEditorTool() (*Tool, error) {
 }
 
 // NewBashTool creates a bash command execution tool (OpenAI format).
-// This is a client-side tool for executing shell commands.
+// This is a backend-side tool for executing shell commands (executed by our backend).
 func NewBashTool() (*Tool, error) {
 	tool := &Tool{
 		Type: "function",
 		Function: FunctionDetails{
 			Name:        "bash",
-			Description: "Execute bash commands (client-side execution)",
+			Description: "Execute bash commands (backend execution)",
 			Parameters: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -87,6 +89,7 @@ func NewBashTool() (*Tool, error) {
 				"required": []string{"command"},
 			},
 		},
+		ExecutionSide: ExecutionSideServer, // Backend executes
 	}
 
 	if err := tool.Validate(); err != nil {
@@ -96,8 +99,9 @@ func NewBashTool() (*Tool, error) {
 	return tool, nil
 }
 
-// NewCustomTool creates a custom function tool (OpenAI format).
+// NewCustomTool creates a custom function tool (OpenAI format) with default backend execution.
 // This follows the universal function calling standard used by OpenAI, Anthropic, Gemini, and OpenRouter.
+// ExecutionSide defaults to Server (backend execution).
 //
 // Parameters:
 //   - name: Function name (required)
@@ -121,6 +125,12 @@ func NewBashTool() (*Tool, error) {
 //	  "required": []string{"location"},
 //	}
 func NewCustomTool(name string, description string, parameters map[string]interface{}) (*Tool, error) {
+	return NewCustomToolWithSide(name, description, parameters, ExecutionSideServer)
+}
+
+// NewCustomToolWithSide creates a custom function tool with explicit execution side.
+// Use this when you need to specify where the tool is executed (Provider, Server, or Client).
+func NewCustomToolWithSide(name string, description string, parameters map[string]interface{}, executionSide ExecutionSide) (*Tool, error) {
 	if name == "" {
 		return nil, errors.New("tool name is required")
 	}
@@ -140,6 +150,7 @@ func NewCustomTool(name string, description string, parameters map[string]interf
 			Description: description,
 			Parameters:  parameters,
 		},
+		ExecutionSide: executionSide,
 	}
 
 	if err := tool.Validate(); err != nil {

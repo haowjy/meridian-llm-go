@@ -58,11 +58,9 @@ func (p *Provider) SupportsModel(model string) bool {
 	return strings.Contains(model, "/")
 }
 
-// validateWebSearchRequirements blocks web_search tool usage with OpenRouter.
-// OpenRouter's built-in search is not suitable for our use case.
-//
-// TODO(search): Implement custom web search tool that works across all providers.
-// Once implemented, remove this block and allow web_search with OpenRouter.
+// validateWebSearchRequirements blocks provider-side web_search tool usage with OpenRouter.
+// OpenRouter's built-in search requires :online suffix and is low quality.
+// Backend-executed web_search (e.g., Tavily) is allowed via ExecutionSide=Server.
 func (p *Provider) validateWebSearchRequirements(req *llmprovider.GenerateRequest) error {
 	// Check if request includes web_search tool
 	if req.Params == nil || len(req.Params.Tools) == 0 {
@@ -71,12 +69,17 @@ func (p *Provider) validateWebSearchRequirements(req *llmprovider.GenerateReques
 
 	for _, tool := range req.Params.Tools {
 		if tool.Function.Name == "search" || tool.Function.Name == "web_search" {
-			return &llmprovider.ModelError{
-				Model:    req.Model,
-				Provider: p.Name().String(),
-				Reason:   "web_search is not yet supported with OpenRouter - custom implementation pending. Use Anthropic provider for web search, or use other tools (doc_search, doc_view, doc_tree).",
-				Err:      llmprovider.ErrInvalidModel,
+			// Only block provider-side web_search (OpenRouter's built-in)
+			// Allow backend-side web_search (Tavily, ExecutionSide=Server or empty)
+			if tool.ExecutionSide == llmprovider.ExecutionSideProvider {
+				return &llmprovider.ModelError{
+					Model:    req.Model,
+					Provider: p.Name().String(),
+					Reason:   "OpenRouter's built-in web_search requires :online suffix and is low quality. Use backend-executed web search (Tavily) instead.",
+					Err:      llmprovider.ErrInvalidModel,
+				}
 			}
+			// ExecutionSideServer or empty (defaults to Server) = backend-executed (Tavily) = ALLOWED
 		}
 	}
 
