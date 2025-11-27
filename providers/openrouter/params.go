@@ -4,27 +4,46 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/haowjy/meridian-llm-go"
+	llmprovider "github.com/haowjy/meridian-llm-go"
 )
 
 // ChatCompletionRequest represents an OpenRouter chat completion request.
 // OpenRouter uses OpenAI-compatible format.
 type ChatCompletionRequest struct {
-	Model       string      `json:"model"`
-	Messages    []Message   `json:"messages"`
-	MaxTokens   *int        `json:"max_tokens,omitempty"`
-	Temperature *float64    `json:"temperature,omitempty"`
-	TopP        *float64    `json:"top_p,omitempty"`
-	TopK        *int        `json:"top_k,omitempty"`
-	Stop        []string    `json:"stop,omitempty"`
-	Stream      bool        `json:"stream"`
-	Tools       []Tool      `json:"tools,omitempty"`
-	ToolChoice  interface{} `json:"tool_choice,omitempty"` // "auto", "none", "required", or {"type": "function", "function": {"name": "..."}}
+	Model       string           `json:"model"`
+	Messages    []Message        `json:"messages"`
+	MaxTokens   *int             `json:"max_tokens,omitempty"`
+	Temperature *float64         `json:"temperature,omitempty"`
+	TopP        *float64         `json:"top_p,omitempty"`
+	TopK        *int             `json:"top_k,omitempty"`
+	Stop        []string         `json:"stop,omitempty"`
+	Stream      bool             `json:"stream"`
+	Tools       []Tool           `json:"tools,omitempty"`
+	ToolChoice  interface{}      `json:"tool_choice,omitempty"` // "auto", "none", "required", or {"type": "function", "function": {"name": "..."}}
+	Reasoning   *ReasoningConfig `json:"reasoning,omitempty"`   // Controls reasoning/thinking tokens
+}
+
+// ReasoningConfig controls reasoning tokens for OpenRouter models.
+// See: https://openrouter.ai/docs/guides/best-practices/reasoning-tokens
+type ReasoningConfig struct {
+	// Effort level: "high", "medium", "low", "minimal", or "none"
+	// "none" disables reasoning entirely
+	Effort string `json:"effort,omitempty"`
+
+	// MaxTokens specifies exact token budget for reasoning (Anthropic-style)
+	// Mutually exclusive with Effort
+	MaxTokens *int `json:"max_tokens,omitempty"`
+
+	// Exclude hides reasoning from response while still using it internally
+	Exclude *bool `json:"exclude,omitempty"`
+
+	// Enabled can be used to enable reasoning with default params
+	Enabled *bool `json:"enabled,omitempty"`
 }
 
 // Message represents a message in the conversation.
 type Message struct {
-	Role             string            `json:"role"` // "system", "user", "assistant", "tool"
+	Role             string            `json:"role"`              // "system", "user", "assistant", "tool"
 	Content          interface{}       `json:"content,omitempty"` // string or []ContentPart
 	Name             *string           `json:"name,omitempty"`
 	ToolCalls        []ToolCall        `json:"tool_calls,omitempty"`
@@ -188,6 +207,22 @@ func buildChatCompletionRequest(req *llmprovider.GenerateRequest) (*ChatCompleti
 			return nil, fmt.Errorf("failed to convert tool choice: %w", err)
 		}
 		openrouterReq.ToolChoice = toolChoice
+	}
+
+	// Reasoning/Thinking - map ThinkingEnabled/ThinkingLevel to OpenRouter's reasoning config
+	// See: https://openrouter.ai/docs/guides/best-practices/reasoning-tokens
+	if params.ThinkingEnabled != nil {
+		if *params.ThinkingEnabled && params.ThinkingLevel != nil {
+			// Thinking enabled - map level to effort
+			openrouterReq.Reasoning = &ReasoningConfig{
+				Effort: *params.ThinkingLevel, // "low", "medium", "high" map directly
+			}
+		} else if !*params.ThinkingEnabled {
+			// Thinking explicitly disabled - use effort: "none"
+			openrouterReq.Reasoning = &ReasoningConfig{
+				Effort: "none",
+			}
+		}
 	}
 
 	return openrouterReq, nil
