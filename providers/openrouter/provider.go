@@ -126,7 +126,7 @@ func (p *Provider) GenerateResponse(ctx context.Context, req *llmprovider.Genera
 
 	// Handle error responses
 	if resp.StatusCode != http.StatusOK {
-		return nil, p.handleErrorResponse(resp)
+		return nil, p.handleErrorResponse(resp, req.Model)
 	}
 
 	// Read response body
@@ -170,7 +170,7 @@ func (p *Provider) buildHTTPRequest(ctx context.Context, req *ChatCompletionRequ
 }
 
 // handleErrorResponse parses error responses from OpenRouter.
-func (p *Provider) handleErrorResponse(resp *http.Response) error {
+func (p *Provider) handleErrorResponse(resp *http.Response, model string) error {
 	body, _ := io.ReadAll(resp.Body)
 
 	// Try to parse structured error
@@ -218,6 +218,27 @@ func (p *Provider) handleErrorResponse(resp *http.Response) error {
 			Retryable:  true,
 			Err:        llmprovider.ErrTimeout,
 		}
+	case 400:
+		// Bad request - include full error details for debugging
+		message := errResp.Error.Message
+		if len(errResp.Error.Metadata) > 0 {
+			// Include metadata for more context (e.g., which field is invalid)
+			metadataJSON, _ := json.Marshal(errResp.Error.Metadata)
+			message = fmt.Sprintf("%s (metadata: %s)", message, string(metadataJSON))
+		}
+		// Also include raw body if different from parsed message
+		rawBody := string(body)
+		if rawBody != "" && rawBody != message {
+			message = fmt.Sprintf("%s [raw: %s]", message, rawBody)
+		}
+		return &llmprovider.ProviderError{
+			Code:       llmprovider.ErrorCodeInvalidRequest,
+			Provider:   p.Name().String(),
+			StatusCode: resp.StatusCode,
+			Message:    message,
+			Retryable:  false,
+			Err:        fmt.Errorf("bad request: %s", message),
+		}
 	case 404:
 		// Model not found - provide helpful message
 		message := errResp.Error.Message
@@ -225,17 +246,23 @@ func (p *Provider) handleErrorResponse(resp *http.Response) error {
 			message = "model not found on OpenRouter - verify model name at https://openrouter.ai/models"
 		}
 		return &llmprovider.ModelError{
-			Model:    "", // Model name not available here, will be in context
+			Model:    model,
 			Provider: p.Name().String(),
 			Reason:   message,
 			Err:      llmprovider.ErrInvalidModel,
 		}
 	default:
+		// Include metadata and raw body for better debugging
+		message := errResp.Error.Message
+		if len(errResp.Error.Metadata) > 0 {
+			metadataJSON, _ := json.Marshal(errResp.Error.Metadata)
+			message = fmt.Sprintf("%s (metadata: %s)", message, string(metadataJSON))
+		}
 		return &llmprovider.ProviderError{
 			Code:       llmprovider.ErrorCodeProviderUnavailable,
 			Provider:   p.Name().String(),
 			StatusCode: resp.StatusCode,
-			Message:    errResp.Error.Message,
+			Message:    message,
 			Retryable:  resp.StatusCode >= 500,
 			Err:        llmprovider.ErrProviderUnavailable,
 		}

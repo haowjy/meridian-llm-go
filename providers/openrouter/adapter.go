@@ -26,7 +26,8 @@ type WebSearchInfo struct {
 
 // ThinkingInfo contains thinking/reasoning text extracted from reasoning_details.
 type ThinkingInfo struct {
-	Text string // Combined text from all reasoning_details
+	Text            string            // Combined text from all reasoning_details (for UI display)
+	OriginalDetails []ReasoningDetail // Original structured reasoning for replay to OpenRouter
 }
 
 // TextInfo contains text content extracted from content field.
@@ -64,6 +65,7 @@ func extractWebSearchInfo(annotations []Annotation) *WebSearchInfo {
 
 // extractThinkingInfo extracts thinking text from reasoning_details array.
 // Returns nil if no reasoning details present or all are empty.
+// Preserves original ReasoningDetails for perfect replay to OpenRouter (enables Claude tool continuation).
 func extractThinkingInfo(details []ReasoningDetail) *ThinkingInfo {
 	if len(details) == 0 {
 		return nil
@@ -90,7 +92,10 @@ func extractThinkingInfo(details []ReasoningDetail) *ThinkingInfo {
 	}
 
 	result := text.String()
-	return &ThinkingInfo{Text: result}
+	return &ThinkingInfo{
+		Text:            result,
+		OriginalDetails: details, // Preserve for replay to OpenRouter
+	}
 }
 
 // extractTextInfo extracts text content from content field.
@@ -181,12 +186,23 @@ func buildNonStreamingBlocks(parsed *ParsedDelta, state *BlockState) ([]*llmprov
 
 	// 2. Thinking block (if present)
 	if parsed.Thinking != nil {
-		blocks = append(blocks, &llmprovider.Block{
+		block := &llmprovider.Block{
 			BlockType:   llmprovider.BlockTypeThinking,
 			Sequence:    state.CurrentIndex,
 			TextContent: &parsed.Thinking.Text,
 			Provider:    &providerIDStr,
-		})
+		}
+
+		// Preserve original ReasoningDetails for perfect replay to OpenRouter
+		// This enables proper tool continuation for Claude models
+		if parsed.Thinking.OriginalDetails != nil && len(parsed.Thinking.OriginalDetails) > 0 {
+			providerData, err := json.Marshal(parsed.Thinking.OriginalDetails)
+			if err == nil {
+				block.ProviderData = providerData
+			}
+		}
+
+		blocks = append(blocks, block)
 		state.CurrentIndex++
 		state.CurrentType = "thinking"
 	}
@@ -208,6 +224,153 @@ func buildNonStreamingBlocks(parsed *ParsedDelta, state *BlockState) ([]*llmprov
 
 // ===== End of non-streaming block builder =====
 
+// splitMessagesAtToolResults splits assistant messages at each tool_result boundary
+// to create proper alternating assistant/tool message pairs (required by OpenRouter/OpenAI API).
+//
+// Example transformation:
+//
+//	Input:  [Msg(assistant, [thinking, text, tool_use, tool_result, thinking, tool_use, tool_result])]
+//	Output: [
+//	  Msg(assistant, [thinking, text, tool_use]),
+//	  Msg(tool, [tool_result]),  // role:"tool" prevents merge with adjacent assistant
+//	  Msg(assistant, [thinking, tool_use]),
+//	  Msg(tool, [tool_result])   // role:"tool" prevents merge with adjacent assistant
+//	]
+//
+// Note: tool_result messages are emitted with role:"tool" (not "assistant") to prevent
+// mergeConsecutiveSameRoleMessages from merging them back with adjacent assistant messages.
+// The convertMessageToOpenRouter function handles both role:"tool" and role:"assistant"
+// messages containing tool_result blocks correctly.
+func splitMessagesAtToolResults(messages []llmprovider.Message) []llmprovider.Message {
+	result := make([]llmprovider.Message, 0, len(messages))
+
+	for _, msg := range messages {
+		if msg.Role != "assistant" {
+			// User messages pass through unchanged
+			result = append(result, msg)
+			continue
+		}
+
+		// Split assistant messages at tool_result boundaries
+		var currentBlocks []*llmprovider.Block
+
+		for _, block := range msg.Blocks {
+			if block.BlockType == llmprovider.BlockTypeToolResult {
+				// Emit accumulated assistant blocks (if any)
+				if len(currentBlocks) > 0 {
+					result = append(result, llmprovider.Message{
+						Role:   "assistant",
+						Blocks: currentBlocks,
+					})
+					currentBlocks = nil
+				}
+
+				// Emit tool_result with role:"tool" to prevent mergeConsecutiveSameRoleMessages from
+				// merging it back with adjacent assistant messages. convertMessageToOpenRouter
+				// extracts tool_result blocks and creates proper role:"tool" messages regardless of input role.
+				result = append(result, llmprovider.Message{
+					Role:   "tool",
+					Blocks: []*llmprovider.Block{block},
+				})
+			} else {
+				// Accumulate assistant blocks (thinking, text, tool_use, etc.)
+				currentBlocks = append(currentBlocks, block)
+			}
+		}
+
+		// Emit remaining assistant blocks (if any)
+		if len(currentBlocks) > 0 {
+			result = append(result, llmprovider.Message{
+				Role:   "assistant",
+				Blocks: currentBlocks,
+			})
+		}
+	}
+
+	return result
+}
+
+// mergeConsecutiveSameRoleMessages combines consecutive messages with the same role.
+// This ensures proper message alternation after splitting.
+//
+// Example transformation:
+//
+//	Before: [assistant (tool_use), assistant (tool_result), user (text)]
+//	After:  [assistant (tool_use, tool_result), user (text)]
+//
+// Note: For OpenRouter, consecutive assistant messages may occur when:
+//   - Multiple tool rounds in one turn
+//   - Empty assistant messages after splitting
+func mergeConsecutiveSameRoleMessages(messages []llmprovider.Message) []llmprovider.Message {
+	if len(messages) <= 1 {
+		return messages
+	}
+
+	merged := make([]llmprovider.Message, 0, len(messages))
+	current := messages[0]
+
+	for i := 1; i < len(messages); i++ {
+		if messages[i].Role == current.Role {
+			// Same role - merge blocks from next message into current
+			current.Blocks = append(current.Blocks, messages[i].Blocks...)
+		} else {
+			// Different role - save current and start new
+			merged = append(merged, current)
+			current = messages[i]
+		}
+	}
+
+	// Append final message
+	merged = append(merged, current)
+
+	return merged
+}
+
+// ===== Thinking Block Replay Helpers =====
+
+// replayOpenRouterThinking reconstructs original ReasoningDetails from a thinking block's ProviderData.
+// Returns nil if ProviderData is empty or invalid (caller should fallback to normalized conversion).
+func replayOpenRouterThinking(block *llmprovider.Block) ([]ReasoningDetail, error) {
+	if !block.HasProviderData() {
+		return nil, fmt.Errorf("no provider data")
+	}
+
+	var details []ReasoningDetail
+	if err := json.Unmarshal(block.ProviderData, &details); err != nil {
+		return nil, fmt.Errorf("invalid provider data: %w", err)
+	}
+
+	return details, nil
+}
+
+// convertThinkingToReasoningDetails converts a thinking block to ReasoningDetails array.
+// Tries to replay from ProviderData first (perfect replay), falls back to normalized text.
+// This enables proper tool continuation for Claude models via OpenRouter.
+func convertThinkingToReasoningDetails(block *llmprovider.Block) []ReasoningDetail {
+	// Strategy 1: Replay from ProviderData (if available and from OpenRouter)
+	if block.IsFromProvider(llmprovider.ProviderOpenRouter) && block.HasProviderData() {
+		if details, err := replayOpenRouterThinking(block); err == nil {
+			return details
+		}
+		// Fall through to normalized conversion if replay fails
+	}
+
+	// Strategy 2: Convert from normalized TextContent
+	// Create synthetic ReasoningDetail from thinking text
+	if block.TextContent == nil || *block.TextContent == "" {
+		return nil
+	}
+
+	return []ReasoningDetail{
+		{
+			Type: "reasoning.text",
+			Text: block.TextContent,
+		},
+	}
+}
+
+// ===== End of Thinking Block Replay Helpers =====
+
 // convertToOpenRouterMessages converts library messages to OpenRouter/OpenAI format.
 func convertToOpenRouterMessages(messages []llmprovider.Message) ([]Message, error) {
 	// Phase 1: Handle cross-provider server tools by splitting messages
@@ -217,11 +380,21 @@ func convertToOpenRouterMessages(messages []llmprovider.Message) ([]Message, err
 		return nil, fmt.Errorf("failed to process cross-provider tools: %w", err)
 	}
 
-	result := make([]Message, 0, len(processedMessages))
+	// Phase 2: Split assistant messages at tool_result boundaries
+	// Backend uses naive message building (one message per turn with all blocks).
+	// For OpenRouter (OpenAI API), we need to split at tool_result boundaries
+	// to create proper message structure for tool continuation.
+	splitMessages := splitMessagesAtToolResults(processedMessages)
 
-	for i, msg := range processedMessages {
+	// Phase 3: Merge consecutive same-role messages (OpenAI API requirement)
+	// After splitting, we may have consecutive assistant messages that need merging
+	mergedMessages := mergeConsecutiveSameRoleMessages(splitMessages)
+
+	result := make([]Message, 0, len(mergedMessages))
+
+	for i, msg := range mergedMessages {
 		// Convert blocks to OpenRouter format
-		// OpenRouter uses OpenAI format: single content string + tool_calls array
+		// This will convert tool_result blocks to role:"tool" messages
 		openrouterMsg, err := convertMessageToOpenRouter(msg, i)
 		if err != nil {
 			return nil, err
@@ -307,25 +480,33 @@ func convertMessageToOpenRouter(msg llmprovider.Message, msgIndex int) ([]Messag
 			Role: msg.Role,
 		}
 
-		// Flatten text and thinking blocks into single content string
+		// Build content and reasoning_details
 		var contentParts []string
+		var allReasoningDetails []ReasoningDetail
+
+		// Process text blocks into content string
 		for _, block := range textBlocks {
 			if block.TextContent != nil {
 				contentParts = append(contentParts, *block.TextContent)
 			}
 		}
+
+		// Process thinking blocks into reasoning_details array
+		// Do NOT flatten thinking to text - preserve structured format for Claude continuation
 		for _, block := range thinkingBlocks {
-			if block.TextContent != nil {
-				// Include thinking as text with marker
-				// OpenRouter doesn't have separate thinking blocks
-				contentParts = append(contentParts, fmt.Sprintf("[Thinking: %s]", *block.TextContent))
-			}
+			details := convertThinkingToReasoningDetails(block)
+			allReasoningDetails = append(allReasoningDetails, details...)
 		}
 
 		// Set content if we have any
 		if len(contentParts) > 0 {
 			content := strings.Join(contentParts, "\n\n")
 			openrouterMsg.Content = content
+		}
+
+		// Set reasoning_details if we have any (for Claude models)
+		if len(allReasoningDetails) > 0 {
+			openrouterMsg.ReasoningDetails = allReasoningDetails
 		}
 
 		// Convert tool_use blocks to tool_calls array (assistant messages only)

@@ -49,6 +49,7 @@ func emitStreamingBlocks(
 	state *BlockState,
 	thinkingContent *strings.Builder,
 	textContent *strings.Builder,
+	thinkingDetails *[]ReasoningDetail,
 	eventChan chan<- llmprovider.StreamEvent,
 ) error {
 	providerIDStr := llmprovider.ProviderOpenRouter.String()
@@ -82,14 +83,22 @@ func emitStreamingBlocks(
 		// Emit complete thinking block
 		if thinkingContent.Len() > 0 {
 			thinkingText := thinkingContent.String()
-			eventChan <- llmprovider.StreamEvent{
-				Block: &llmprovider.Block{
-					BlockType:   llmprovider.BlockTypeThinking,
-					Sequence:    state.CurrentIndex,
-					TextContent: &thinkingText,
-					Provider:    &providerIDStr,
-				},
+			block := &llmprovider.Block{
+				BlockType:   llmprovider.BlockTypeThinking,
+				Sequence:    state.CurrentIndex,
+				TextContent: &thinkingText,
+				Provider:    &providerIDStr,
 			}
+
+			// Preserve accumulated ReasoningDetails for replay
+			if thinkingDetails != nil && len(*thinkingDetails) > 0 {
+				providerData, err := json.Marshal(*thinkingDetails)
+				if err == nil {
+					block.ProviderData = providerData
+				}
+			}
+
+			eventChan <- llmprovider.StreamEvent{Block: block}
 		}
 	}
 
@@ -190,7 +199,7 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 	// Check for immediate errors
 	if resp.StatusCode != http.StatusOK {
 		defer resp.Body.Close()
-		return nil, p.handleErrorResponse(resp)
+		return nil, p.handleErrorResponse(resp, req.Model)
 	}
 
 	// Create streaming channel
@@ -217,8 +226,9 @@ func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventCh
 	state := BlockState{CurrentIndex: 0}
 
 	// Accumulators for complete block content (needed for persistence)
-	var thinkingContent strings.Builder // Accumulate thinking text for complete block
-	var textContent strings.Builder     // Accumulate text content for complete block
+	var thinkingContent strings.Builder       // Accumulate thinking text for complete block
+	var textContent strings.Builder           // Accumulate text content for complete block
+	var thinkingDetails *[]ReasoningDetail    // Accumulate reasoning details for replay to OpenRouter
 
 	// Keep these for metadata and tool calls
 	toolCallsMap := make(map[int]*accumulatedToolCall) // index -> accumulated tool call
@@ -287,12 +297,20 @@ func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventCh
 			delta.Content,
 		)
 
+		// Accumulate reasoning details for thinking blocks (for replay to OpenRouter)
+		if len(delta.ReasoningDetails) > 0 {
+			if thinkingDetails == nil {
+				thinkingDetails = &[]ReasoningDetail{}
+			}
+			*thinkingDetails = append(*thinkingDetails, delta.ReasoningDetails...)
+		}
+
 		// Determine block transitions
 		transition := determineTransition(state, parsed)
 
 		// Emit blocks/deltas based on parsed data and transition
 		// Pass accumulators so complete blocks can be built for persistence
-		if err := emitStreamingBlocks(parsed, transition, &state, &thinkingContent, &textContent, eventChan); err != nil {
+		if err := emitStreamingBlocks(parsed, transition, &state, &thinkingContent, &textContent, thinkingDetails, eventChan); err != nil {
 			return err
 		}
 
@@ -397,14 +415,22 @@ func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventCh
 	// Emit complete thinking block if it was started (for persistence)
 	if state.CurrentType == "thinking" && thinkingContent.Len() > 0 {
 		thinkingText := thinkingContent.String()
-		eventChan <- llmprovider.StreamEvent{
-			Block: &llmprovider.Block{
-				BlockType:   llmprovider.BlockTypeThinking,
-				Sequence:    state.CurrentIndex,
-				TextContent: &thinkingText,
-				Provider:    &providerIDStr,
-			},
+		block := &llmprovider.Block{
+			BlockType:   llmprovider.BlockTypeThinking,
+			Sequence:    state.CurrentIndex,
+			TextContent: &thinkingText,
+			Provider:    &providerIDStr,
 		}
+
+		// Preserve accumulated ReasoningDetails for replay
+		if thinkingDetails != nil && len(*thinkingDetails) > 0 {
+			providerData, err := json.Marshal(*thinkingDetails)
+			if err == nil {
+				block.ProviderData = providerData
+			}
+		}
+
+		eventChan <- llmprovider.StreamEvent{Block: block}
 		state.CurrentIndex++
 	}
 
