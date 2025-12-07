@@ -43,12 +43,14 @@ type Delta struct {
 
 // emitStreamingBlocks emits stream events based on parsed delta and state transition.
 // Emits both deltas (for real-time UI) and complete blocks (for persistence).
+// The reasoningDetails slice is used to populate ProviderData for thinking blocks.
 func emitStreamingBlocks(
 	parsed *ParsedDelta,
 	transition BlockTransition,
 	state *BlockState,
 	thinkingContent *strings.Builder,
 	textContent *strings.Builder,
+	reasoningDetails []ReasoningDetail,
 	eventChan chan<- llmprovider.StreamEvent,
 ) error {
 	providerIDStr := llmprovider.ProviderOpenRouter.String()
@@ -82,12 +84,21 @@ func emitStreamingBlocks(
 		// Emit complete thinking block
 		if thinkingContent.Len() > 0 {
 			thinkingText := thinkingContent.String()
+
+			// Consolidate reasoning_details for ProviderData (enables replay to OpenRouter)
+			var providerData json.RawMessage
+			if len(reasoningDetails) > 0 {
+				consolidated := consolidateReasoningDetails(reasoningDetails)
+				providerData, _ = json.Marshal(consolidated)
+			}
+
 			eventChan <- llmprovider.StreamEvent{
 				Block: &llmprovider.Block{
-					BlockType:   llmprovider.BlockTypeThinking,
-					Sequence:    state.CurrentIndex,
-					TextContent: &thinkingText,
-					Provider:    &providerIDStr,
+					BlockType:    llmprovider.BlockTypeThinking,
+					Sequence:     state.CurrentIndex,
+					TextContent:  &thinkingText,
+					Provider:     &providerIDStr,
+					ProviderData: providerData,
 				},
 			}
 		}
@@ -217,8 +228,9 @@ func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventCh
 	state := BlockState{CurrentIndex: 0}
 
 	// Accumulators for complete block content (needed for persistence)
-	var thinkingContent strings.Builder // Accumulate thinking text for complete block
-	var textContent strings.Builder     // Accumulate text content for complete block
+	var thinkingContent strings.Builder        // Accumulate thinking text for complete block
+	var textContent strings.Builder            // Accumulate text content for complete block
+	var reasoningDetails []ReasoningDetail     // Accumulate original reasoning_details for ProviderData
 
 	// Keep these for metadata and tool calls
 	toolCallsMap := make(map[int]*accumulatedToolCall) // index -> accumulated tool call
@@ -287,12 +299,18 @@ func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventCh
 			delta.Content,
 		)
 
+		// Capture original reasoning_details for ProviderData (needed for replay)
+		// Per OpenRouter docs, reasoning_details must be preserved for multi-turn conversations
+		if len(delta.ReasoningDetails) > 0 {
+			reasoningDetails = append(reasoningDetails, delta.ReasoningDetails...)
+		}
+
 		// Determine block transitions
 		transition := determineTransition(state, parsed)
 
 		// Emit blocks/deltas based on parsed data and transition
 		// Pass accumulators so complete blocks can be built for persistence
-		if err := emitStreamingBlocks(parsed, transition, &state, &thinkingContent, &textContent, eventChan); err != nil {
+		if err := emitStreamingBlocks(parsed, transition, &state, &thinkingContent, &textContent, reasoningDetails, eventChan); err != nil {
 			return err
 		}
 
@@ -397,12 +415,21 @@ func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventCh
 	// Emit complete thinking block if it was started (for persistence)
 	if state.CurrentType == "thinking" && thinkingContent.Len() > 0 {
 		thinkingText := thinkingContent.String()
+
+		// Consolidate reasoning_details for ProviderData (enables replay to OpenRouter)
+		var providerData json.RawMessage
+		if len(reasoningDetails) > 0 {
+			consolidated := consolidateReasoningDetails(reasoningDetails)
+			providerData, _ = json.Marshal(consolidated)
+		}
+
 		eventChan <- llmprovider.StreamEvent{
 			Block: &llmprovider.Block{
-				BlockType:   llmprovider.BlockTypeThinking,
-				Sequence:    state.CurrentIndex,
-				TextContent: &thinkingText,
-				Provider:    &providerIDStr,
+				BlockType:    llmprovider.BlockTypeThinking,
+				Sequence:     state.CurrentIndex,
+				TextContent:  &thinkingText,
+				Provider:     &providerIDStr,
+				ProviderData: providerData,
 			},
 		}
 		state.CurrentIndex++
@@ -463,8 +490,8 @@ func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventCh
 			"input":       input,
 		}
 
-		// All OpenRouter tools are client-side (executed by backend)
-		executionSide := llmprovider.ExecutionSideClient
+		// All OpenRouter tools are backend-side (executed by our backend)
+		executionSide := llmprovider.ExecutionSideServer
 
 		eventChan <- llmprovider.StreamEvent{
 			Block: &llmprovider.Block{

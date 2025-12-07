@@ -27,8 +27,9 @@ const (
 type ExecutionSide string
 
 const (
-	ExecutionSideServer ExecutionSide = "server" // Provider executes tool
-	ExecutionSideClient ExecutionSide = "client" // Consumer executes tool
+	ExecutionSideProvider ExecutionSide = "provider" // LLM provider executes (e.g., Anthropic's built-in web_search)
+	ExecutionSideServer   ExecutionSide = "server"   // Our backend executes (e.g., Tavily web search, bash, custom tools)
+	ExecutionSideClient   ExecutionSide = "client"   // Frontend executes (future use, rarely used)
 )
 
 // ToolChoiceMode controls tool selection behavior

@@ -160,7 +160,12 @@ func (b *Block) IsToolResultBlock() bool {
 	return b.BlockType == BlockTypeToolResult
 }
 
-// IsServerSideTool returns true if this tool is executed server-side
+// IsProviderSideTool returns true if this tool is executed by the LLM provider (e.g., Anthropic's web_search)
+func (b *Block) IsProviderSideTool() bool {
+	return b.GetExecutionSide() == ExecutionSideProvider
+}
+
+// IsServerSideTool returns true if this tool is executed server-side (backend)
 func (b *Block) IsServerSideTool() bool {
 	return b.GetExecutionSide() == ExecutionSideServer
 }

@@ -478,8 +478,8 @@ func convertToolCallToBlock(toolCall ToolCall, sequence int) (*llmprovider.Block
 		"input":       input,
 	}
 
-	// All OpenRouter tools are client-side (executed by backend)
-	executionSide := llmprovider.ExecutionSideClient
+	// All OpenRouter tools are backend-side (executed by our backend)
+	executionSide := llmprovider.ExecutionSideServer
 
 	return &llmprovider.Block{
 		BlockType:     llmprovider.BlockTypeToolUse,
@@ -593,4 +593,69 @@ func mapFinishReason(finishReason string) string {
 	default:
 		return finishReason
 	}
+}
+
+// consolidateReasoningDetails combines adjacent same-type reasoning details into single entries.
+// This consolidates streaming chunks for storage while preserving the original OpenRouter format.
+//
+// Example:
+//
+//	Input:  [{"type": "reasoning.text", "text": "A"}, {"type": "reasoning.text", "text": "B"}, {"type": "reasoning.summary", "summary": "C"}]
+//	Output: [{"type": "reasoning.text", "text": "AB"}, {"type": "reasoning.summary", "summary": "C"}]
+func consolidateReasoningDetails(details []ReasoningDetail) []ReasoningDetail {
+	if len(details) == 0 {
+		return nil
+	}
+
+	result := make([]ReasoningDetail, 0)
+	var currentType string
+	var textBuilder strings.Builder
+	var summaryBuilder strings.Builder
+
+	flush := func() {
+		if currentType == "" {
+			return
+		}
+
+		detail := ReasoningDetail{Type: currentType}
+
+		if textBuilder.Len() > 0 {
+			text := textBuilder.String()
+			detail.Text = &text
+		}
+		if summaryBuilder.Len() > 0 {
+			summary := summaryBuilder.String()
+			detail.Summary = &summary
+		}
+
+		// Only add if we have actual content
+		if detail.Text != nil || detail.Summary != nil {
+			result = append(result, detail)
+		}
+
+		textBuilder.Reset()
+		summaryBuilder.Reset()
+	}
+
+	for _, detail := range details {
+		// Type change - flush previous accumulation
+		if detail.Type != currentType {
+			flush()
+			currentType = detail.Type
+		}
+
+		// Accumulate content based on field
+		if detail.Text != nil {
+			textBuilder.WriteString(*detail.Text)
+		}
+		if detail.Summary != nil {
+			summaryBuilder.WriteString(*detail.Summary)
+		}
+		// Note: We skip detail.Data (encrypted) as it can't be meaningfully consolidated
+	}
+
+	// Flush final accumulation
+	flush()
+
+	return result
 }
