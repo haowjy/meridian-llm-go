@@ -6,13 +6,18 @@ import (
 )
 
 // NewSearchTool creates a web search tool (OpenAI format).
+// This is a provider-executed tool - the LLM provider handles search execution.
 // Providers will convert this to their specific format:
 //   - Anthropic: Uses web_search_20250305
 //   - OpenAI: Uses function calling with this schema
 //   - Gemini: Uses FunctionDeclaration
+//
+// Note: For server-executed web search (e.g., Tavily), use NewCustomTool() instead.
+// Custom tools default to server execution and won't be blocked by provider validation.
 func NewSearchTool() (*Tool, error) {
 	tool := &Tool{
-		Type: "function",
+		Type:          "function",
+		ExecutionSide: ExecutionSideProvider, // Provider executes built-in search
 		Function: FunctionDetails{
 			Name:        "search",
 			Description: "Search the web for current information",

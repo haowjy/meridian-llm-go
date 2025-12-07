@@ -48,8 +48,9 @@ All tools use OpenAI-style function format:
 
 ```go
 type Tool struct {
-    Type     string           // Always "function"
-    Function FunctionDetails
+    Type          string           // Always "function"
+    Function      FunctionDetails
+    ExecutionSide ExecutionSide    // Where tool executes: "provider", "server" (default), or "client"
 }
 
 type FunctionDetails struct {
@@ -58,6 +59,11 @@ type FunctionDetails struct {
     Parameters  map[string]interface{} // JSON Schema object
 }
 ```
+
+**ExecutionSide values:**
+- `"provider"` - LLM provider executes (e.g., Anthropic's built-in web_search)
+- `"server"` - Backend executes (default - e.g., Tavily, custom tools)
+- `"client"` - Frontend executes (rarely used)
 
 Providers automatically convert this to their native format:
 - **Anthropic**: `tools: [{type: "computer_20241022", ...}]` or `{name: "web_search_20250305"}`
@@ -77,9 +83,13 @@ Provider mapping:
 - **Gemini**: `google_search` (server-side)
 - **OpenAI**: Model-based search (only certain models)
 
-**Execution:** Server-side (provider executes)
+**Execution:** Provider-side (LLM provider executes)
+
+**ExecutionSide:** `NewSearchTool()` sets `ExecutionSide = Provider` automatically.
 
 **Portability:** ❌ Results are provider-specific and not portable
+
+> **Note:** For server-executed web search (e.g., Tavily), use `NewCustomTool("web_search", ...)` instead. Custom tools default to `ExecutionSide = Server` and are executed by your backend.
 
 ### Text Editor
 
@@ -132,7 +142,9 @@ tool, err := llm.NewCustomTool(
 )
 ```
 
-**Execution:** Client-side (you implement execution loop)
+**Execution:** Server-side or client-side (you implement execution loop)
+
+**ExecutionSide:** `NewCustomTool()` defaults to `ExecutionSide = Server` (no explicit field needed).
 
 **Portability:** ✅ Fully portable across all providers
 
@@ -348,10 +360,16 @@ See [streaming.md](streaming.md) for complete streaming patterns.
 ## API Reference
 
 **Factory functions:**
-- `NewSearchTool() (*Tool, error)` - Web search tool
+- `NewSearchTool() (*Tool, error)` - Web search tool (provider-executed)
 - `NewTextEditorTool() (*Tool, error)` - Text editor tool
 - `NewBashTool() (*Tool, error)` - Bash execution tool
-- `NewCustomTool(name, description, parameters) (*Tool, error)` - Custom tool
+- `NewCustomTool(name, description, parameters) (*Tool, error)` - Custom tool (server-executed by default)
+
+**Tool helpers:**
+- `tool.GetExecutionSide() ExecutionSide` - Returns execution side (defaults to "server")
+- `tool.IsProviderExecuted() bool` - True if provider executes
+- `tool.IsServerExecuted() bool` - True if backend executes (default)
+- `tool.IsClientExecuted() bool` - True if frontend executes
 
 **Block helpers:**
 - `block.GetToolUseID() (string, bool)` - Extract tool_use_id

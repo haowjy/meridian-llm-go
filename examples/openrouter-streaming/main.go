@@ -27,7 +27,6 @@ import (
 func main() {
 	fmt.Println("=== OpenRouter Streaming Example ===")
 	fmt.Println("Demonstrating streaming with thinking blocks\n")
-	fmt.Println("NOTE: web_search currently disabled - custom implementation pending\n")
 
 	// Load .env file if present (searches up directory tree)
 	helpers.LoadEnv()
@@ -47,16 +46,11 @@ func main() {
 	}
 	fmt.Printf("Provider: %s\n\n", provider.Name())
 
-	// NOTE: web_search is currently blocked with OpenRouter pending custom implementation
-	// TODO(search): Re-enable when custom web_search tool is implemented
-	//
-	// // Create search tool
-	// searchTool, err := llmprovider.NewSearchTool()
-	// if err != nil {
-	// 	log.Fatalf("Failed to create search tool: %v", err)
-	// }
+	// NOTE: Server-executed web_search (via custom tools like Tavily) is supported.
+	// Only provider-executed built-in search is blocked since OpenRouter's isn't suitable.
+	// See NewSearchTool() vs NewCustomTool() for the distinction.
 
-	// Build request (without web search for now)
+	// Build request
 	req := &llmprovider.GenerateRequest{
 		Model: "moonshotai/kimi-k2-thinking", // Thinking-enabled model
 		Messages: []llmprovider.Message{
@@ -73,10 +67,6 @@ func main() {
 		},
 		Params: &llmprovider.RequestParams{
 			MaxTokens: helpers.IntPtr(1000),
-			// NOTE: web_search tool commented out until custom implementation is ready
-			// Tools: []llmprovider.Tool{
-			// 	*searchTool,
-			// },
 		},
 	}
 

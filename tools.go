@@ -56,8 +56,35 @@ type FunctionDetails struct {
 //   - Anthropic: Flatten and rename (parameters → input_schema)
 //   - Gemini: Flatten and rename (parameters → parameters_json_schema)
 type Tool struct {
-	Type     string           `json:"type"`     // Always "function" for function tools
-	Function FunctionDetails  `json:"function"` // Function definition
+	Type          string          `json:"type"`                    // Always "function" for function tools
+	Function      FunctionDetails `json:"function"`                // Function definition
+	ExecutionSide ExecutionSide   `json:"execution_side,omitempty"` // Where tool execution happens (default: server)
+}
+
+// GetExecutionSide returns the execution side, defaulting to server if not set.
+// Most tools are server-executed (backend handles execution), so this is the sensible default.
+func (t *Tool) GetExecutionSide() ExecutionSide {
+	if t.ExecutionSide == "" {
+		return ExecutionSideServer
+	}
+	return t.ExecutionSide
+}
+
+// IsProviderExecuted returns true if the tool is executed by the LLM provider.
+// Provider-executed tools (like Anthropic's built-in web_search) are handled by the provider itself.
+func (t *Tool) IsProviderExecuted() bool {
+	return t.GetExecutionSide() == ExecutionSideProvider
+}
+
+// IsServerExecuted returns true if the tool is executed by the backend server.
+// This is the default for most tools (custom tools, Tavily web search, etc.).
+func (t *Tool) IsServerExecuted() bool {
+	return t.GetExecutionSide() == ExecutionSideServer
+}
+
+// IsClientExecuted returns true if the tool is executed by the client/frontend.
+func (t *Tool) IsClientExecuted() bool {
+	return t.GetExecutionSide() == ExecutionSideClient
 }
 
 // Validate checks if the Tool is properly configured
