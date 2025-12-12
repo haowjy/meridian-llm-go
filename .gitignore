@@ -22,6 +22,7 @@ anthropic-streaming
 anthropic-thinking
 lorem-basic
 lorem-streaming
+openrouter-streaming
 
 # Environment files
 .env
