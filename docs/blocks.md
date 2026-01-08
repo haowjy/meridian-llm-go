@@ -353,8 +353,9 @@ const (
 )
 
 const (
-    ExecutionSideServer = "server"  // Provider executes
-    ExecutionSideClient = "client"  // Consumer executes
+    ExecutionSideProvider = "provider" // LLM provider executes (e.g., Anthropic's web_search)
+    ExecutionSideServer   = "server"   // Our backend executes (e.g., custom tools)
+    ExecutionSideClient   = "client"   // Frontend executes
 )
 
 const (
@@ -374,7 +375,7 @@ const (
 - `block.IsUserBlock() bool`
 - `block.IsAssistantBlock() bool`
 - `block.IsToolBlock() bool`
-- `block.IsServerSideTool() bool`
+- `block.IsProviderSideTool() bool`
 - `block.GetToolUseID() (string, bool)`
 - `block.GetToolName() (string, bool)`
 - `block.GetToolInput() (map[string]interface{}, bool)`
