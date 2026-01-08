@@ -26,7 +26,7 @@ import (
 
 func main() {
 	fmt.Println("=== Anthropic Streaming Example ===")
-	fmt.Println("Demonstrating real-time streaming with Claude\n")
+	fmt.Println("Demonstrating real-time streaming with Claude")
 
 	// Load .env file if present (searches up directory tree)
 	helpers.LoadEnv()
@@ -93,7 +93,7 @@ func main() {
 
 		// Handle final metadata
 		if event.Metadata != nil {
-			fmt.Println("\n---\n")
+			fmt.Println("\n---")
 			fmt.Printf("✓ Streaming complete\n")
 			fmt.Printf("  Model: %s\n", event.Metadata.Model)
 			fmt.Printf("  Input tokens: %d\n", event.Metadata.InputTokens)

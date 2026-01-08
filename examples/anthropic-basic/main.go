@@ -26,7 +26,7 @@ import (
 
 func main() {
 	fmt.Println("=== Anthropic Basic (Non-Streaming) Example ===")
-	fmt.Println("Demonstrating blocking response with Claude\n")
+	fmt.Println("Demonstrating blocking response with Claude")
 
 	// Load .env file if present (searches up directory tree)
 	helpers.LoadEnv()
@@ -68,7 +68,7 @@ func main() {
 	}
 
 	// Generate response (blocks until complete)
-	fmt.Println("\nGenerating response from Claude...\n")
+	fmt.Println("\nGenerating response from Claude...")
 
 	resp, err := provider.GenerateResponse(context.Background(), req)
 	if err != nil {
@@ -83,7 +83,7 @@ func main() {
 			fmt.Println(*block.TextContent)
 		}
 	}
-	fmt.Println("---\n")
+	fmt.Println("---")
 
 	// Print metadata
 	fmt.Printf("✓ Response complete\n")

@@ -27,7 +27,7 @@ import (
 
 func main() {
 	fmt.Println("=== Anthropic Extended Thinking Example ===")
-	fmt.Println("Demonstrating thinking mode with separate thinking/answer blocks\n")
+	fmt.Println("Demonstrating thinking mode with separate thinking/answer blocks")
 
 	// Load .env file if present (searches up directory tree)
 	helpers.LoadEnv()
@@ -77,7 +77,7 @@ func main() {
 	}
 
 	// Start streaming
-	fmt.Println("Streaming response with thinking...\n")
+	fmt.Println("Streaming response with thinking...")
 
 	eventChan, err := provider.StreamResponse(context.Background(), req)
 	if err != nil {
@@ -118,7 +118,7 @@ func main() {
 
 		// Handle final metadata
 		if event.Metadata != nil {
-			fmt.Println("\n---\n")
+			fmt.Println("\n---")
 			fmt.Printf("✓ Streaming complete\n")
 			fmt.Printf("  Model: %s\n", event.Metadata.Model)
 			fmt.Printf("  Input tokens: %d\n", event.Metadata.InputTokens)

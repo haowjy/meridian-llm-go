@@ -475,9 +475,19 @@ func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventCh
 		input := make(map[string]interface{})
 		if acc.Arguments.Len() > 0 {
 			if err := json.Unmarshal([]byte(argStr), &input); err != nil {
-				fmt.Printf("[ERROR] failed to parse tool call arguments: index=%d, id=%q, name=%q, malformed_json=%q, error=%v\n",
-					idx, acc.ID, acc.Name, argStr, err)
-				return fmt.Errorf("invalid tool call arguments at index %d: received malformed JSON %q - %w", idx, argStr, err)
+				// Instead of aborting, emit recovery blocks so LLM can see error and retry
+				fmt.Printf("[WARN] malformed tool JSON, emitting recovery blocks: index=%d, id=%q, name=%q, error=%v\n",
+					idx, acc.ID, acc.Name, err)
+
+				recovery, nextSeq := llmprovider.NewMalformedToolRecovery(
+					acc.ID, acc.Name, argStr, err,
+					state.CurrentIndex, &providerIDStr,
+				)
+
+				eventChan <- llmprovider.StreamEvent{Block: recovery.ToolUseBlock}
+				eventChan <- llmprovider.StreamEvent{Block: recovery.ToolResultBlock}
+				state.CurrentIndex = nextSeq
+				continue // Continue to next tool instead of aborting
 			}
 			fmt.Printf("[DEBUG] successfully parsed tool call arguments: index=%d, id=%q, name=%q, parsed_input=%v\n",
 				idx, acc.ID, acc.Name, input)

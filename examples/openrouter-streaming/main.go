@@ -26,8 +26,8 @@ import (
 
 func main() {
 	fmt.Println("=== OpenRouter Streaming Example ===")
-	fmt.Println("Demonstrating streaming with thinking blocks\n")
-	fmt.Println("NOTE: web_search currently disabled - custom implementation pending\n")
+	fmt.Println("Demonstrating streaming with thinking blocks")
+	fmt.Println("NOTE: web_search currently disabled - custom implementation pending")
 
 	// Load .env file if present (searches up directory tree)
 	helpers.LoadEnv()
@@ -120,7 +120,7 @@ func main() {
 						}
 					}
 				}
-				fmt.Println("---\n")
+				fmt.Println("---")
 
 			case llmprovider.BlockTypeThinking:
 				if !hasThinking {
@@ -133,7 +133,7 @@ func main() {
 
 			case llmprovider.BlockTypeText:
 				if hasThinking {
-					fmt.Println("\n---\n")
+					fmt.Println("\n---")
 				}
 				if !hasText {
 					fmt.Println("💬 RESPONSE:\n---")
@@ -160,7 +160,7 @@ func main() {
 		// Handle final metadata
 		if event.Metadata != nil {
 			if hasText {
-				fmt.Println("\n---\n")
+				fmt.Println("\n---")
 			}
 			fmt.Printf("✓ Streaming complete\n")
 			fmt.Printf("  Model: %s\n", event.Metadata.Model)

@@ -145,7 +145,7 @@ func TestConvertToAnthropicMessages_ToolResult_MissingID(t *testing.T) {
 func TestConvertToAnthropicMessages_CrossProviderServerTool(t *testing.T) {
 	// Simulate a conversation with Google web_search, now replaying to Anthropic
 	googleProvider := "google"
-	executionSide := llmprovider.ExecutionSideServer
+	executionSide := llmprovider.ExecutionSideProvider
 	searchText := "I searched the web and found these sources:\n1. [Example](http://example.com)"
 	responseText := "Based on the search results, the weather is sunny."
 
@@ -263,7 +263,7 @@ func TestConvertToAnthropicMessages_SameProviderServerTool(t *testing.T) {
 
 func TestSplitMessagesAtCrossProviderTool(t *testing.T) {
 	googleProvider := "google"
-	executionSide := llmprovider.ExecutionSideServer
+	executionSide := llmprovider.ExecutionSideProvider
 	searchText := "Search results here"
 	responseText := "Final response"
 

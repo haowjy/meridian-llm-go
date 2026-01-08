@@ -18,7 +18,7 @@ import (
 
 func main() {
 	fmt.Println("=== Lorem Basic (Non-Streaming) Example ===")
-	fmt.Println("Demonstrating blocking response with mock provider (no API key required)\n")
+	fmt.Println("Demonstrating blocking response with mock provider (no API key required)")
 
 	// Create Lorem provider (no API key needed)
 	provider := lorem.NewProvider()
@@ -60,7 +60,7 @@ func main() {
 			fmt.Println(*block.TextContent)
 		}
 	}
-	fmt.Println("---\n")
+	fmt.Println("---")
 
 	// Print metadata
 	fmt.Printf("✓ Response complete\n")

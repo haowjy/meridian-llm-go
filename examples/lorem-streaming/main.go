@@ -18,7 +18,7 @@ import (
 
 func main() {
 	fmt.Println("=== Lorem Streaming Example ===")
-	fmt.Println("Demonstrating real-time streaming with mock provider (no API key required)\n")
+	fmt.Println("Demonstrating real-time streaming with mock provider (no API key required)")
 
 	// Create Lorem provider (no API key needed)
 	provider := lorem.NewProvider()
@@ -70,7 +70,7 @@ func main() {
 
 		// Handle final metadata
 		if event.Metadata != nil {
-			fmt.Println("\n---\n")
+			fmt.Println("\n---")
 			fmt.Printf("✓ Streaming complete\n")
 			fmt.Printf("  Model: %s\n", event.Metadata.Model)
 			fmt.Printf("  Input tokens: %d\n", event.Metadata.InputTokens)

@@ -74,6 +74,12 @@ func (p *Provider) GenerateResponse(ctx context.Context, req *llmprovider.Genera
 	inputTokens := p.estimateTokens(req.Messages)
 	outputTokens := len(strings.Fields(text)) // Word count as proxy
 
+	// Determine stop reason based on model type
+	stopReason := "end_turn"
+	if isCutoffModel(req.Model) {
+		stopReason = "max_tokens"
+	}
+
 	// Create response
 	return &llmprovider.GenerateResponse{
 		Blocks: []*llmprovider.Block{
@@ -85,7 +91,7 @@ func (p *Provider) GenerateResponse(ctx context.Context, req *llmprovider.Genera
 		Model:        req.Model,
 		InputTokens:  inputTokens,
 		OutputTokens: outputTokens,
-		StopReason:   "end_turn",
+		StopReason:   stopReason,
 		ResponseMetadata: map[string]interface{}{
 			"mock":     true,
 			"provider": "lorem",
@@ -278,10 +284,9 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 		log.Printf("[LOREM] Loop exited: totalOutputTokens=%d, maxTokens=%d, blockIndex=%d",
 			totalOutputTokens, maxTokens, blockIndex)
 
-		// If we exhausted token budget, mark as cutoff
-		if totalOutputTokens >= maxTokens {
-			stopReason = "max_tokens"
-		}
+		// Note: stopReason is already set correctly:
+		// - "max_tokens" is set inside the loop when cutoff=true (cutoff models only)
+		// - "end_turn" remains for normal completion (non-cutoff models)
 
 		// Send final metadata
 		inputTokens := p.estimateTokens(req.Messages)
@@ -480,26 +485,28 @@ func (p *Provider) generateText(targetChars int) string {
 	return strings.TrimSpace(sb.String())
 }
 
-// generateTextWords generates lorem ipsum text with approximately targetWords words.
+// generateTextWords generates lorem ipsum text with exactly targetWords words.
+// Truncates output to ensure we don't exceed the target.
 func (p *Provider) generateTextWords(targetWords int) string {
-	var sb strings.Builder
-	wordCount := 0
-
-	for wordCount < targetWords {
-		// Generate sentence with 5-15 words
-		sentence := p.generator.Sentence(5, 15)
-		sb.WriteString(sentence)
-		sb.WriteString(" ")
-
-		wordCount += len(strings.Fields(sentence))
-
-		// Add paragraph break every ~50 words
-		if wordCount%50 == 0 {
-			sb.WriteString("\n\n")
-		}
+	if targetWords <= 0 {
+		return ""
 	}
 
-	return strings.TrimSpace(sb.String())
+	var allWords []string
+
+	for len(allWords) < targetWords {
+		// Generate sentence with 5-15 words
+		sentence := p.generator.Sentence(5, 15)
+		words := strings.Fields(sentence)
+		allWords = append(allWords, words...)
+	}
+
+	// Truncate to exactly targetWords
+	if len(allWords) > targetWords {
+		allWords = allWords[:targetWords]
+	}
+
+	return strings.Join(allWords, " ")
 }
 
 // streamToolUseBlockFromBuiltIn streams a tool_use block based on BuiltInTool.
