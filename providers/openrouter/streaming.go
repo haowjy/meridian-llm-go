@@ -8,9 +8,14 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/haowjy/meridian-llm-go"
 )
+
+// DefaultStreamingIdleTimeout is the default timeout for SSE streaming.
+// If no data is received for this duration, the stream is considered stalled.
+const DefaultStreamingIdleTimeout = 2 * time.Minute
 
 // ChatCompletionChunk represents a streaming chunk from OpenRouter.
 type ChatCompletionChunk struct {
@@ -219,8 +224,27 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 }
 
 // streamEvents reads SSE events and emits library StreamEvents.
+// Uses idle timeout detection: if no data is received for DefaultStreamingIdleTimeout,
+// returns ErrStreamingIdleTimeout.
 func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventChan chan<- llmprovider.StreamEvent) error {
-	scanner := bufio.NewScanner(body)
+	// Start line reader goroutine
+	lineChan := make(chan string, 10) // Buffered to avoid blocking scanner
+	scanErrChan := make(chan error, 1)
+
+	go func() {
+		scanner := bufio.NewScanner(body)
+		for scanner.Scan() {
+			select {
+			case lineChan <- scanner.Text():
+			case <-ctx.Done():
+				return
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			scanErrChan <- err
+		}
+		close(lineChan)
+	}()
 
 	// Initialize block state (SOLID-compliant)
 	state := BlockState{CurrentIndex: 0}
@@ -234,179 +258,223 @@ func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventCh
 	toolCallsMap := make(map[int]*accumulatedToolCall) // index -> accumulated tool call
 	var model string
 	var stopReason string
-	var usage *Usage // Token usage (captured from last chunk)
+	var usage *Usage        // Token usage (captured from last chunk)
+	var generationID string // Generation ID for querying stats after cancel
 
-	for scanner.Scan() {
-		line := scanner.Text()
+	// Idle timeout timer - reset on each line received
+	idleTimer := time.NewTimer(DefaultStreamingIdleTimeout)
+	defer idleTimer.Stop()
 
-		// Skip empty lines and comments
-		if line == "" || strings.HasPrefix(line, ":") {
-			continue
-		}
-
-		// Parse SSE data line
-		if !strings.HasPrefix(line, "data: ") {
-			continue
-		}
-
-		data := strings.TrimPrefix(line, "data: ")
-
-		// Check for termination
-		if data == "[DONE]" {
-			break
-		}
-
-		// Parse chunk
-		var chunk ChatCompletionChunk
-		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-			// Check for error response
-			var errResp struct {
-				Error struct {
-					Code    int    `json:"code"`
-					Message string `json:"message"`
-				} `json:"error"`
+	// resetIdleTimer safely resets the idle timer
+	resetIdleTimer := func() {
+		if !idleTimer.Stop() {
+			select {
+			case <-idleTimer.C:
+			default:
 			}
-			if json.Unmarshal([]byte(data), &errResp) == nil && errResp.Error.Message != "" {
-				return fmt.Errorf("openrouter streaming error: %s", errResp.Error.Message)
+		}
+		idleTimer.Reset(DefaultStreamingIdleTimeout)
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+
+		case <-idleTimer.C:
+			// No data received for too long - provider stalled
+			return &llmprovider.ProviderError{
+				Code:      llmprovider.ErrorCodeStreamingIdleTimeout,
+				Provider:  llmprovider.ProviderOpenRouter.String(),
+				Message:   fmt.Sprintf("no data received for %v during streaming", DefaultStreamingIdleTimeout),
+				Retryable: true,
+				Err:       llmprovider.ErrStreamingIdleTimeout,
 			}
-			// Ignore unparseable chunks (might be keep-alive or other messages)
-			continue
-		}
 
-		if len(chunk.Choices) == 0 {
-			continue
-		}
+		case err := <-scanErrChan:
+			return fmt.Errorf("error reading stream: %w", err)
 
-		choice := chunk.Choices[0]
-		delta := choice.Delta
-
-		// Update model
-		if chunk.Model != "" {
-			model = chunk.Model
-		}
-
-		// Capture usage (typically only in last chunk)
-		if chunk.Usage != nil {
-			usage = chunk.Usage
-		}
-
-		// Parse delta using SOLID-compliant functions
-		parsed := parseDelta(
-			delta.Annotations,
-			delta.ReasoningDetails,
-			delta.Content,
-		)
-
-		// Accumulate reasoning details for thinking blocks (for replay to OpenRouter)
-		if len(delta.ReasoningDetails) > 0 {
-			if thinkingDetails == nil {
-				thinkingDetails = &[]ReasoningDetail{}
+		case line, ok := <-lineChan:
+			if !ok {
+				// Channel closed - scanner finished normally
+				// Fall through to finalization below
+				goto finalize
 			}
-			*thinkingDetails = append(*thinkingDetails, delta.ReasoningDetails...)
-		}
 
-		// Determine block transitions
-		transition := determineTransition(state, parsed)
+			// Reset idle timer on any line (including empty lines, keep-alives)
+			resetIdleTimer()
 
-		// Emit blocks/deltas based on parsed data and transition
-		// Pass accumulators so complete blocks can be built for persistence
-		if err := emitStreamingBlocks(parsed, transition, &state, &thinkingContent, &textContent, thinkingDetails, eventChan); err != nil {
-			return err
-		}
+			// Skip empty lines and comments
+			if line == "" || strings.HasPrefix(line, ":") {
+				continue
+			}
 
-		// Process tool calls delta (keep existing logic - tool calls need accumulation)
-		if len(delta.ToolCalls) > 0 {
-			for _, toolCallDelta := range delta.ToolCalls {
-				// DEBUG: Print each tool call delta with actual index from OpenRouter
-				var indexFromOR string
-				if toolCallDelta.Index != nil {
-					indexFromOR = fmt.Sprintf("%d", *toolCallDelta.Index)
-				} else {
-					indexFromOR = "nil"
+			// Parse SSE data line
+			if !strings.HasPrefix(line, "data: ") {
+				continue
+			}
+
+			data := strings.TrimPrefix(line, "data: ")
+
+			// Check for termination
+			if data == "[DONE]" {
+				goto finalize
+			}
+
+			// Parse chunk
+			var chunk ChatCompletionChunk
+			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+				// Check for error response
+				var errResp struct {
+					Error struct {
+						Code    int    `json:"code"`
+						Message string `json:"message"`
+					} `json:"error"`
 				}
-				fmt.Printf("[DEBUG] processing tool call delta: openrouter_index=%s, id=%q, name=%q, args_len=%d, args_preview=%q\n",
-					indexFromOR, toolCallDelta.ID, toolCallDelta.Function.Name,
-					len(toolCallDelta.Function.Arguments), truncateString(toolCallDelta.Function.Arguments, 50))
-
-				// Determine the map index to use (priority order):
-				// 1. Use Index from OpenRouter if present (most reliable)
-				// 2. Find existing entry by ID
-				// 3. Create new entry at next available index
-				var idx int
-				if toolCallDelta.Index != nil {
-					// Use actual index from OpenRouter response
-					idx = *toolCallDelta.Index
-					fmt.Printf("[DEBUG] using OpenRouter index: %d\n", idx)
-				} else if existingIdx, exists := findToolCallIndex(toolCallsMap, toolCallDelta.ID); exists {
-					// Find existing by ID
-					idx = existingIdx
-					fmt.Printf("[DEBUG] found existing tool call by ID: id=%q, map_index=%d\n", toolCallDelta.ID, idx)
-				} else {
-					// Fallback: create new entry
-					idx = len(toolCallsMap)
-					fmt.Printf("[DEBUG] creating new tool call entry (fallback): id=%q, map_index=%d\n", toolCallDelta.ID, idx)
+				if json.Unmarshal([]byte(data), &errResp) == nil && errResp.Error.Message != "" {
+					return fmt.Errorf("openrouter streaming error: %s", errResp.Error.Message)
 				}
+				// Ignore unparseable chunks (might be keep-alive or other messages)
+				continue
+			}
 
-				acc, exists := toolCallsMap[idx]
-				if !exists {
-					// New tool call - emit block start
-					acc = &accumulatedToolCall{}
-					toolCallsMap[idx] = acc
+			if len(chunk.Choices) == 0 {
+				continue
+			}
 
-					blockType := llmprovider.BlockTypeToolUse
-					blockIndex := state.CurrentIndex + 1 + idx
-					fmt.Printf("[DEBUG] emitting tool call START: map_index=%d, blockIndex=%d, state.CurrentIndex=%d, id=%q, name=%q\n",
-						idx, blockIndex, state.CurrentIndex, toolCallDelta.ID, toolCallDelta.Function.Name)
-					eventChan <- llmprovider.StreamEvent{
-						Delta: &llmprovider.BlockDelta{
-							BlockIndex:   blockIndex,
-							BlockType:    &blockType,
-							DeltaType:    llmprovider.DeltaTypeToolCallStart,
-							ToolCallID:   &toolCallDelta.ID,
-							ToolCallName: &toolCallDelta.Function.Name,
-						},
+			choice := chunk.Choices[0]
+			delta := choice.Delta
+
+			// Update model
+			if chunk.Model != "" {
+				model = chunk.Model
+			}
+
+			// Capture generation ID (available in all chunks, capture from first)
+			if generationID == "" && chunk.ID != "" {
+				generationID = chunk.ID
+			}
+
+			// Capture usage (typically only in last chunk)
+			if chunk.Usage != nil {
+				usage = chunk.Usage
+			}
+
+			// Parse delta using SOLID-compliant functions
+			parsed := parseDelta(
+				delta.Annotations,
+				delta.ReasoningDetails,
+				delta.Content,
+			)
+
+			// Accumulate reasoning details for thinking blocks (for replay to OpenRouter)
+			if len(delta.ReasoningDetails) > 0 {
+				if thinkingDetails == nil {
+					thinkingDetails = &[]ReasoningDetail{}
+				}
+				*thinkingDetails = append(*thinkingDetails, delta.ReasoningDetails...)
+			}
+
+			// Determine block transitions
+			transition := determineTransition(state, parsed)
+
+			// Emit blocks/deltas based on parsed data and transition
+			// Pass accumulators so complete blocks can be built for persistence
+			if err := emitStreamingBlocks(parsed, transition, &state, &thinkingContent, &textContent, thinkingDetails, eventChan); err != nil {
+				return err
+			}
+
+			// Process tool calls delta (keep existing logic - tool calls need accumulation)
+			if len(delta.ToolCalls) > 0 {
+				for _, toolCallDelta := range delta.ToolCalls {
+					// DEBUG: Print each tool call delta with actual index from OpenRouter
+					var indexFromOR string
+					if toolCallDelta.Index != nil {
+						indexFromOR = fmt.Sprintf("%d", *toolCallDelta.Index)
+					} else {
+						indexFromOR = "nil"
+					}
+					fmt.Printf("[DEBUG] processing tool call delta: openrouter_index=%s, id=%q, name=%q, args_len=%d, args_preview=%q\n",
+						indexFromOR, toolCallDelta.ID, toolCallDelta.Function.Name,
+						len(toolCallDelta.Function.Arguments), truncateString(toolCallDelta.Function.Arguments, 50))
+
+					// Determine the map index to use (priority order):
+					// 1. Use Index from OpenRouter if present (most reliable)
+					// 2. Find existing entry by ID
+					// 3. Create new entry at next available index
+					var idx int
+					if toolCallDelta.Index != nil {
+						// Use actual index from OpenRouter response
+						idx = *toolCallDelta.Index
+						fmt.Printf("[DEBUG] using OpenRouter index: %d\n", idx)
+					} else if existingIdx, exists := findToolCallIndex(toolCallsMap, toolCallDelta.ID); exists {
+						// Find existing by ID
+						idx = existingIdx
+						fmt.Printf("[DEBUG] found existing tool call by ID: id=%q, map_index=%d\n", toolCallDelta.ID, idx)
+					} else {
+						// Fallback: create new entry
+						idx = len(toolCallsMap)
+						fmt.Printf("[DEBUG] creating new tool call entry (fallback): id=%q, map_index=%d\n", toolCallDelta.ID, idx)
+					}
+
+					acc, exists := toolCallsMap[idx]
+					if !exists {
+						// New tool call - emit block start
+						acc = &accumulatedToolCall{}
+						toolCallsMap[idx] = acc
+
+						blockType := llmprovider.BlockTypeToolUse
+						blockIndex := state.CurrentIndex + 1 + idx
+						fmt.Printf("[DEBUG] emitting tool call START: map_index=%d, blockIndex=%d, state.CurrentIndex=%d, id=%q, name=%q\n",
+							idx, blockIndex, state.CurrentIndex, toolCallDelta.ID, toolCallDelta.Function.Name)
+						eventChan <- llmprovider.StreamEvent{
+							Delta: &llmprovider.BlockDelta{
+								BlockIndex:   blockIndex,
+								BlockType:    &blockType,
+								DeltaType:    llmprovider.DeltaTypeToolCallStart,
+								ToolCallID:   &toolCallDelta.ID,
+								ToolCallName: &toolCallDelta.Function.Name,
+							},
+						}
+					}
+
+					// Accumulate data
+					if toolCallDelta.ID != "" {
+						acc.ID = toolCallDelta.ID
+					}
+					if toolCallDelta.Function.Name != "" {
+						acc.Name = toolCallDelta.Function.Name
+					}
+					if toolCallDelta.Function.Arguments != "" {
+						prevLength := acc.Arguments.Len()
+						acc.Arguments.WriteString(toolCallDelta.Function.Arguments)
+						newLength := acc.Arguments.Len()
+
+						// DEBUG: Print Arguments accumulation
+						fmt.Printf("[DEBUG] accumulated tool call arguments: id=%q, map_index=%d, prev_len=%d, chunk_len=%d, new_total=%d, preview=%q\n",
+							acc.ID, idx, prevLength, len(toolCallDelta.Function.Arguments), newLength, truncateString(acc.Arguments.String(), 100))
+
+						// Emit input JSON delta
+						blockIndex := state.CurrentIndex + 1 + idx
+						eventChan <- llmprovider.StreamEvent{
+							Delta: &llmprovider.BlockDelta{
+								BlockIndex: blockIndex,
+								DeltaType:  llmprovider.DeltaTypeJSON,
+								JSONDelta:  &toolCallDelta.Function.Arguments,
+							},
+						}
 					}
 				}
-
-				// Accumulate data
-				if toolCallDelta.ID != "" {
-					acc.ID = toolCallDelta.ID
-				}
-				if toolCallDelta.Function.Name != "" {
-					acc.Name = toolCallDelta.Function.Name
-				}
-				if toolCallDelta.Function.Arguments != "" {
-					prevLength := acc.Arguments.Len()
-					acc.Arguments.WriteString(toolCallDelta.Function.Arguments)
-					newLength := acc.Arguments.Len()
-
-					// DEBUG: Print Arguments accumulation
-					fmt.Printf("[DEBUG] accumulated tool call arguments: id=%q, map_index=%d, prev_len=%d, chunk_len=%d, new_total=%d, preview=%q\n",
-						acc.ID, idx, prevLength, len(toolCallDelta.Function.Arguments), newLength, truncateString(acc.Arguments.String(), 100))
-
-					// Emit input JSON delta
-					blockIndex := state.CurrentIndex + 1 + idx
-					eventChan <- llmprovider.StreamEvent{
-						Delta: &llmprovider.BlockDelta{
-							BlockIndex:  blockIndex,
-							DeltaType:   llmprovider.DeltaTypeJSON,
-							JSONDelta:   &toolCallDelta.Function.Arguments,
-						},
-					}
-				}
 			}
-		}
 
-		// Check for finish
-		if choice.FinishReason != nil {
-			stopReason = mapFinishReason(*choice.FinishReason)
+			// Check for finish
+			if choice.FinishReason != nil {
+				stopReason = mapFinishReason(*choice.FinishReason)
+			}
 		}
 	}
 
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("error reading stream: %w", err)
-	}
-
+finalize:
 	// Web search blocks are already emitted during streaming
 	// Emit complete blocks for thinking/text (for persistence) before tool calls
 
@@ -516,8 +584,9 @@ func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventCh
 
 	// Emit final metadata
 	metadata := &llmprovider.StreamMetadata{
-		Model:      model,
-		StopReason: stopReason,
+		Model:        model,
+		StopReason:   stopReason,
+		GenerationID: generationID,
 	}
 
 	// Extract token usage if available (typically in last chunk)

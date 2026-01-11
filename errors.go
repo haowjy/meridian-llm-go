@@ -20,6 +20,7 @@ const (
 	ErrorCodeInvalidRequest      ErrorCode = "INVALID_REQUEST"
 	ErrorCodeProviderUnavailable ErrorCode = "PROVIDER_UNAVAILABLE"
 	ErrorCodeTimeout             ErrorCode = "TIMEOUT"
+	ErrorCodeStreamingIdleTimeout ErrorCode = "STREAMING_IDLE_TIMEOUT"
 )
 
 // Sentinel errors for common failure modes.
@@ -52,6 +53,11 @@ var (
 
 	// ErrTimeout indicates the request timed out.
 	ErrTimeout = errors.New("llmprovider: request timeout")
+
+	// ErrStreamingIdleTimeout indicates no data received during streaming for too long.
+	// This is distinct from ErrTimeout (overall request timeout) - it specifically means
+	// the provider started streaming but then went silent (no tokens, no heartbeats).
+	ErrStreamingIdleTimeout = errors.New("llmprovider: streaming idle timeout - no data received")
 )
 
 // ModelError represents an error related to model validation or availability.
@@ -169,8 +175,8 @@ func IsRetryable(err error) bool {
 		return false
 	}
 
-	// Check for timeout (including context.DeadlineExceeded)
-	if errors.Is(err, ErrTimeout) || errors.Is(err, context.DeadlineExceeded) {
+	// Check for timeout (including context.DeadlineExceeded and streaming idle timeout)
+	if errors.Is(err, ErrTimeout) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrStreamingIdleTimeout) {
 		return true
 	}
 

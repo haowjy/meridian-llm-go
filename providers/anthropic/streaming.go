@@ -3,11 +3,16 @@ package anthropic
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 
 	"github.com/haowjy/meridian-llm-go"
 )
+
+// DefaultStreamingIdleTimeout is the default timeout for SDK streaming.
+// If no event is received for this duration, the stream is considered stalled.
+const DefaultStreamingIdleTimeout = 2 * time.Minute
 
 // StreamResponse generates a streaming response from Claude.
 // Returns a channel that emits StreamEvent as deltas arrive from the API.
@@ -31,7 +36,7 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 	// Create streaming channel
 	eventChan := make(chan llmprovider.StreamEvent, 10) // Buffered to prevent blocking
 
-	// Start streaming goroutine
+	// Start streaming goroutine with idle timeout detection
 	go func() {
 		defer close(eventChan)
 
@@ -41,45 +46,98 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 		// Accumulator for final message metadata
 		message := anthropic.Message{}
 
-		// Iterate through streaming events
-		for stream.Next() {
-			event := stream.Current()
+		// Channel for receiving events from the SDK stream reader
+		type sdkEvent struct {
+			event anthropic.MessageStreamEventUnion
+			ok    bool
+		}
+		sdkEventChan := make(chan sdkEvent, 1)
+		sdkErrChan := make(chan error, 1)
 
-			// Accumulate event into final message
-			if err := message.Accumulate(event); err != nil {
+		// Start SDK stream reader goroutine
+		go func() {
+			defer close(sdkEventChan)
+			for stream.Next() {
+				select {
+				case sdkEventChan <- sdkEvent{event: stream.Current(), ok: true}:
+				case <-ctx.Done():
+					return
+				}
+			}
+			if err := stream.Err(); err != nil {
+				sdkErrChan <- err
+			}
+		}()
+
+		// Idle timeout timer - reset on each event received
+		idleTimer := time.NewTimer(DefaultStreamingIdleTimeout)
+		defer idleTimer.Stop()
+
+		// resetIdleTimer safely resets the idle timer
+		resetIdleTimer := func() {
+			if !idleTimer.Stop() {
+				select {
+				case <-idleTimer.C:
+				default:
+				}
+			}
+			idleTimer.Reset(DefaultStreamingIdleTimeout)
+		}
+
+		for {
+			select {
+			case <-ctx.Done():
+				eventChan <- llmprovider.StreamEvent{Error: ctx.Err()}
+				return
+
+			case <-idleTimer.C:
+				// No data received for too long - provider stalled
 				eventChan <- llmprovider.StreamEvent{
-					Error: fmt.Errorf("failed to accumulate message: %w", err),
+					Error: &llmprovider.ProviderError{
+						Code:      llmprovider.ErrorCodeStreamingIdleTimeout,
+						Provider:  llmprovider.ProviderAnthropic.String(),
+						Message:   fmt.Sprintf("no data received for %v during streaming", DefaultStreamingIdleTimeout),
+						Retryable: true,
+						Err:       llmprovider.ErrStreamingIdleTimeout,
+					},
 				}
 				return
-			}
 
-			// Transform Anthropic event to library StreamEvent
-			// Pass accumulated message so we can emit complete blocks on ContentBlockStop
-			streamEvent := transformAnthropicStreamEvent(event, &message)
+			case err := <-sdkErrChan:
+				eventChan <- llmprovider.StreamEvent{
+					Error: fmt.Errorf("anthropic streaming error: %w", err),
+				}
+				return
 
-			// Send to channel if not empty (check context in case consumer cancelled)
-			if streamEvent.Delta != nil || streamEvent.Block != nil || streamEvent.Error != nil {
-				select {
-				case <-ctx.Done():
-					// Consumer cancelled, send error and exit
+			case evt, ok := <-sdkEventChan:
+				if !ok {
+					// Channel closed - stream finished normally, send metadata
+					goto sendMetadata
+				}
+
+				// Reset idle timer on any event
+				resetIdleTimer()
+
+				// Accumulate event into final message
+				if err := message.Accumulate(evt.event); err != nil {
 					eventChan <- llmprovider.StreamEvent{
-						Error: ctx.Err(),
+						Error: fmt.Errorf("failed to accumulate message: %w", err),
 					}
 					return
-				case eventChan <- streamEvent:
-					// Successfully sent
+				}
+
+				// Transform Anthropic event to library StreamEvent
+				// Pass accumulated message so we can emit complete blocks on ContentBlockStop
+				streamEvent := transformAnthropicStreamEvent(evt.event, &message)
+
+				// Send to channel if not empty
+				if streamEvent.Delta != nil || streamEvent.Block != nil || streamEvent.Error != nil {
+					eventChan <- streamEvent
 				}
 			}
 		}
 
-		// Check for streaming errors
-		if err := stream.Err(); err != nil {
-			eventChan <- llmprovider.StreamEvent{
-				Error: fmt.Errorf("anthropic streaming error: %w", err),
-			}
-			return
-		}
-
+	sendMetadata:
 		// Send final message metadata
 		metadata := &llmprovider.StreamMetadata{
 			Model:        string(message.Model),
