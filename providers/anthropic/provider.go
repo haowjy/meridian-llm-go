@@ -64,8 +64,14 @@ func (p *Provider) GenerateResponse(ctx context.Context, req *llmprovider.Genera
 		return nil, fmt.Errorf("anthropic API call failed: %w", err)
 	}
 
+	// Extract tools from request params (pass to conversion to preserve ExecutionSide)
+	var tools []llmprovider.Tool
+	if req.Params != nil {
+		tools = req.Params.Tools
+	}
+
 	// Convert response to library format with metadata
-	response, err := convertFromAnthropicResponse(message)
+	response, err := p.convertFromAnthropicResponse(message, tools)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert response: %w", err)
 	}

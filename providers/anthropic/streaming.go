@@ -27,6 +27,12 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 		}
 	}
 
+	// Extract tools from request params (pass to event transformer to preserve ExecutionSide)
+	var tools []llmprovider.Tool
+	if req.Params != nil {
+		tools = req.Params.Tools
+	}
+
 	// Build Anthropic API parameters (shared logic with GenerateResponse)
 	apiParams, err := buildMessageParams(req)
 	if err != nil {
@@ -128,7 +134,7 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 
 				// Transform Anthropic event to library StreamEvent
 				// Pass accumulated message so we can emit complete blocks on ContentBlockStop
-				streamEvent := transformAnthropicStreamEvent(evt.event, &message)
+				streamEvent := p.transformAnthropicStreamEvent(evt.event, &message, tools)
 
 				// Send to channel if not empty
 				if streamEvent.Delta != nil || streamEvent.Block != nil || streamEvent.Error != nil {
@@ -172,6 +178,9 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 // The message parameter is the SDK's accumulated message, which contains complete ContentBlocks
 // as they finish streaming. We use this to emit complete, normalized blocks when ContentBlockStop arrives.
 //
+// The tools parameter contains the original tool definitions from the request, used to preserve
+// ExecutionSide when converting tool_use blocks.
+//
 // Anthropic stream events include:
 // - MessageStart: Contains message metadata (id, model, role)
 // - ContentBlockStart: New content block started (index, type)
@@ -179,7 +188,7 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 // - ContentBlockStop: Current block finished → we emit complete block here
 // - MessageDelta: Message-level delta (stop_reason, stop_sequence)
 // - MessageStop: Streaming complete
-func transformAnthropicStreamEvent(event anthropic.MessageStreamEventUnion, message *anthropic.Message) llmprovider.StreamEvent {
+func (p *Provider) transformAnthropicStreamEvent(event anthropic.MessageStreamEventUnion, message *anthropic.Message, tools []llmprovider.Tool) llmprovider.StreamEvent {
 	switch e := event.AsAny().(type) {
 	case anthropic.MessageStartEvent:
 		// MessageStart event - not needed for deltas, metadata comes at the end
@@ -316,7 +325,7 @@ func transformAnthropicStreamEvent(event anthropic.MessageStreamEventUnion, mess
 		// Convert the complete Anthropic block to library format using shared logic
 		// This handles normalization of provider-specific types (server_tool_use → web_search,
 		// web_search_tool_result → web_search_result)
-		block, err := convertAnthropicBlock(message.Content[blockIndex], blockIndex)
+		block, err := p.convertAnthropicBlock(message.Content[blockIndex], blockIndex, tools)
 		if err != nil {
 			return llmprovider.StreamEvent{
 				Error: fmt.Errorf("convert block %d: %w", blockIndex, err),

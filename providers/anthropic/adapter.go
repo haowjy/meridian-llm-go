@@ -446,7 +446,10 @@ func replayAnthropicBlock(block *llmprovider.Block) (anthropic.ContentBlockParam
 // This is the shared conversion logic used by both streaming and non-streaming paths.
 // It normalizes provider-specific block types (web_search_tool_result, server_tool_use)
 // to standard library types (web_search, web_search_result, tool_use) while preserving raw data in ProviderData.
-func convertAnthropicBlock(content anthropic.ContentBlockUnion, sequence int) (*llmprovider.Block, error) {
+//
+// The tools parameter contains the original tool definitions from the request, used to preserve
+// ExecutionSide when converting tool_use blocks. This prevents race conditions from shared state.
+func (p *Provider) convertAnthropicBlock(content anthropic.ContentBlockUnion, sequence int, tools []llmprovider.Tool) (*llmprovider.Block, error) {
 	providerID := llmprovider.ProviderAnthropic.String()
 	provider := &providerID
 
@@ -569,12 +572,21 @@ func convertAnthropicBlock(content anthropic.ContentBlockUnion, sequence int) (*
 		contentMap["tool_name"] = content.Name
 		contentMap["input"] = content.Input
 
-		// Determine execution side based on tool type
-		// Provider-side tools: web_search (Anthropic executes, results included automatically)
-		// Backend-side tools: bash, text_editor, custom (our backend must execute)
+		// Determine execution side by checking original tool definition
+		// Default to server-side execution
 		executionSide := llmprovider.ExecutionSideServer
-		if content.Name == "web_search" {
-			executionSide = llmprovider.ExecutionSideProvider
+		toolName := content.Name
+
+		// Check if we sent this tool in the request - use its ExecutionSide
+		// This allows the same tool name ("web_search") to support both backend
+		// (Tavily) and provider (Anthropic built-in) execution modes
+		for _, tool := range tools {
+			if tool.Function.Name == toolName {
+				// Use the tool definition's ExecutionSide
+				// (Tool.ExecutionSide is a value, not a pointer - NewCustomTool always sets it)
+				executionSide = tool.ExecutionSide
+				break
+			}
 		}
 
 		return &llmprovider.Block{
@@ -742,12 +754,13 @@ func convertAnthropicBlock(content anthropic.ContentBlockUnion, sequence int) (*
 }
 
 // convertFromAnthropicResponse converts an Anthropic response to library format.
-func convertFromAnthropicResponse(msg *anthropic.Message) (*llmprovider.GenerateResponse, error) {
+// The tools parameter contains the original tool definitions from the request.
+func (p *Provider) convertFromAnthropicResponse(msg *anthropic.Message, tools []llmprovider.Tool) (*llmprovider.GenerateResponse, error) {
 	// Convert content blocks using shared conversion logic
 	blocks := make([]*llmprovider.Block, 0, len(msg.Content))
 
 	for i, content := range msg.Content {
-		block, err := convertAnthropicBlock(content, i)
+		block, err := p.convertAnthropicBlock(content, i, tools)
 		if err != nil {
 			// Log error but continue (don't fail entire response)
 			continue
