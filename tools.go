@@ -45,9 +45,9 @@ const (
 // FunctionDetails represents the function definition within a tool (OpenAI format).
 // This matches the universal standard used by OpenAI, OpenRouter, and easily converts to Anthropic/Gemini.
 type FunctionDetails struct {
-	Name        string                 `json:"name"`                  // Function name (required)
-	Description string                 `json:"description,omitempty"` // What the function does
-	Parameters  map[string]interface{} `json:"parameters"`            // JSON Schema for parameters
+	Name        string          `json:"name"`                  // Function name (required)
+	Description string          `json:"description,omitempty"` // What the function does
+	Parameters  ToolInputSchema `json:"parameters"`            // Typed JSON Schema for parameters
 }
 
 // Tool represents a function tool (OpenAI universal format).
@@ -75,12 +75,8 @@ func (t *Tool) Validate() error {
 		return errors.New("function name is required")
 	}
 
-	if t.Function.Parameters == nil {
-		return errors.New("function parameters are required")
-	}
-
-	// Validate that parameters is a valid JSON schema object
-	if schemaType, ok := t.Function.Parameters["type"].(string); !ok || schemaType != "object" {
+	// Validate that parameters has type "object" (JSON Schema requirement)
+	if t.Function.Parameters.Type != "object" {
 		return errors.New("function parameters must be a JSON schema with type 'object'")
 	}
 

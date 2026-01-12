@@ -115,9 +115,9 @@ type Tool struct {
 
 // FunctionDefinition represents a function tool definition.
 type FunctionDefinition struct {
-	Name        string                 `json:"name"`
-	Description *string                `json:"description,omitempty"`
-	Parameters  map[string]interface{} `json:"parameters"` // JSON Schema
+	Name        string  `json:"name"`
+	Description *string `json:"description,omitempty"`
+	Parameters  any     `json:"parameters"` // JSON Schema (accepts ToolInputSchema or map)
 }
 
 // ChatCompletionResponse represents an OpenRouter chat completion response (non-streaming).

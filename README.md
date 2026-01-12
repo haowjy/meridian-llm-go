@@ -276,18 +276,29 @@ Thinking blocks are emitted as separate content blocks during streaming.
 
 ## Tools
 
-Supports built-in and custom tools with auto-mapping:
+Supports built-in and custom tools:
 
 ```go
+// Built-in tools
+searchTool, _ := llmprovider.NewSearchTool()
+bashTool, _ := llmprovider.NewBashTool()
+
+// Custom tools with typed schemas
+schema := llmprovider.NewToolInputSchema()
+schema.AddProperty("query", llmprovider.PropertySchema{
+    Type:        "string",
+    Description: "Search query",
+}, -1)
+schema.AddRequired("query")
+
+customTool, _ := llmprovider.NewCustomTool("my_search", "Custom search", schema)
+
 params := &llmprovider.RequestParams{
-    Tools: []llmprovider.Tool{
-        {Name: "web_search"},  // Auto-maps to built-in
-        {Name: "bash"},
-    },
+    Tools: []llmprovider.Tool{*searchTool, *customTool},
 }
 ```
 
-See [docs/tools.md](docs/tools.md) for comprehensive guide including custom tools and execution patterns.
+See [docs/tools.md](docs/tools.md) for comprehensive guide including execution patterns.
 
 ## Error Handling
 
@@ -397,6 +408,9 @@ meridian-llm-go/
 ├── streaming.go         # StreamEvent, StreamMetadata
 ├── types.go             # Block, BlockDelta
 ├── params.go            # RequestParams + validation
+├── schema.go            # ToolInputSchema, PropertySchema (typed JSON Schema)
+├── tools.go             # Tool, FunctionDetails
+├── tool_types.go        # Tool constructors (NewCustomTool, etc.)
 ├── errors.go            # Typed errors
 ├── test_helpers.go      # Test utilities
 ├── providers/

@@ -102,41 +102,17 @@ func convertBashTool(tool *llmprovider.Tool) (anthropic.ToolUnionParam, error) {
 
 // convertCustomTool converts custom function tool to Anthropic custom tool format.
 // Custom tools are client-side executed.
-// Converts OpenAI format (tool.Function.Parameters) → Anthropic format (input_schema).
+// Converts typed ToolInputSchema → Anthropic format (input_schema).
 func convertCustomTool(tool *llmprovider.Tool) (anthropic.ToolUnionParam, error) {
-	// OpenAI format: tool.Function.Parameters contains full JSON schema
-	// Example: {"type": "object", "properties": {...}, "required": [...]}
-	//
-	// Anthropic format needs:
-	// - Type: "object"
-	// - Properties: just the properties object (not full schema)
-	// - ExtraFields: other schema fields like "required"
+	// With typed ToolInputSchema, we have direct access to all fields.
+	// No more type assertions needed - the schema is already properly typed.
+	params := tool.Function.Parameters
 
-	// Extract fields from OpenAI schema
-	properties, _ := tool.Function.Parameters["properties"]
-
-	// Build Anthropic schema with correct structure
-	// Type can be elided (zero value) - it will marshal as "object"
+	// Build Anthropic schema with correct structure.
+	// Properties field uses OrderedProperties which implements MarshalJSON for ordering.
 	schema := anthropic.ToolInputSchemaParam{
-		Properties:  properties,
-		ExtraFields: make(map[string]any),
-	}
-
-	// Extract required field if present (it's a direct field in v1.17.0)
-	if required, ok := tool.Function.Parameters["required"].([]interface{}); ok {
-		schema.Required = make([]string, len(required))
-		for i, v := range required {
-			if str, ok := v.(string); ok {
-				schema.Required[i] = str
-			}
-		}
-	}
-
-	// Copy other fields (additionalProperties, etc.) to ExtraFields
-	for key, value := range tool.Function.Parameters {
-		if key != "type" && key != "properties" && key != "required" {
-			schema.ExtraFields[key] = value
-		}
+		Properties: params.Properties, // OrderedProperties marshals with correct order
+		Required:   params.Required,   // Already []string - no type assertion needed
 	}
 
 	// Anthropic custom tool format (standard function calling)

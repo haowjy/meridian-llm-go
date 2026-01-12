@@ -26,25 +26,19 @@ req := &llm.GenerateRequest{
 
 **Custom tools:**
 ```go
-weatherTool, _ := llm.NewCustomTool(
-    "get_weather",
-    "Get current weather for a location",
-    map[string]interface{}{
-        "type": "object",
-        "properties": map[string]interface{}{
-            "location": map[string]interface{}{
-                "type":        "string",
-                "description": "City name",
-            },
-        },
-        "required": []string{"location"},
-    },
-)
+schema := llm.NewToolInputSchema()
+schema.AddProperty("location", llm.PropertySchema{
+    Type:        "string",
+    Description: "City name",
+}, -1)
+schema.AddRequired("location")
+
+weatherTool, _ := llm.NewCustomTool("get_weather", "Get current weather", schema)
 ```
 
 ## Tool Structure
 
-All tools use OpenAI-style function format:
+All tools use OpenAI-style function format with typed schemas:
 
 ```go
 type Tool struct {
@@ -55,7 +49,21 @@ type Tool struct {
 type FunctionDetails struct {
     Name        string
     Description string
-    Parameters  map[string]interface{} // JSON Schema object
+    Parameters  ToolInputSchema // Typed JSON Schema
+}
+
+type ToolInputSchema struct {
+    Type       string            // Always "object"
+    Properties OrderedProperties // Property definitions (ordered for streaming)
+    Required   []string          // Required field names
+}
+
+type PropertySchema struct {
+    Type        string   // "string", "integer", "boolean", "array", "object"
+    Description string
+    Enum        []string // Optional: limit to specific values
+    Minimum     *int     // Optional: for integers
+    Maximum     *int     // Optional: for integers
 }
 ```
 
@@ -112,46 +120,62 @@ Provider mapping:
 ### Basic Custom Tool
 
 ```go
-tool, err := llm.NewCustomTool(
-    "get_weather",
-    "Get current weather for a location",
-    map[string]interface{}{
-        "type": "object",
-        "properties": map[string]interface{}{
-            "location": map[string]interface{}{
-                "type":        "string",
-                "description": "City name",
-            },
-            "unit": map[string]interface{}{
-                "type": "string",
-                "enum": []interface{}{"celsius", "fahrenheit"},
-            },
-        },
-        "required": []string{"location"},
-    },
-)
+schema := llm.NewToolInputSchema()
+schema.AddProperty("location", llm.PropertySchema{
+    Type:        "string",
+    Description: "City name",
+}, -1)
+schema.AddProperty("unit", llm.PropertySchema{
+    Type: "string",
+    Enum: []string{"celsius", "fahrenheit"},
+}, -1)
+schema.AddRequired("location")
+
+tool, err := llm.NewCustomTool("get_weather", "Get current weather", schema)
 ```
 
 **Execution:** Client-side (you implement execution loop)
 
 **Portability:** ✅ Fully portable across all providers
 
-### Parameters Schema
+### Building Schemas
 
-The `parameters` field follows [JSON Schema](https://json-schema.org/):
+Use the typed `ToolInputSchema` API:
 
 ```go
-map[string]interface{}{
-    "type": "object",
-    "properties": map[string]interface{}{
-        "field_name": map[string]interface{}{
-            "type":        "string",                    // string, number, boolean, array, object
-            "description": "What this field does",
-            "enum":        []interface{}{"a", "b"},     // Optional: limit to specific values
-        },
-    },
-    "required": []string{"field_name"},                 // Optional: required fields
-}
+schema := llm.NewToolInputSchema()
+
+// Add properties (position -1 = append to end)
+schema.AddProperty("query", llm.PropertySchema{
+    Type:        "string",
+    Description: "Search query",
+}, -1)
+
+schema.AddProperty("limit", llm.PropertySchema{
+    Type:        "integer",
+    Description: "Max results",
+    Minimum:     llm.IntPtr(1),
+    Maximum:     llm.IntPtr(100),
+}, -1)
+
+schema.AddProperty("format", llm.PropertySchema{
+    Type:        "string",
+    Description: "Output format",
+    Enum:        []string{"json", "xml", "csv"},
+}, -1)
+
+// Mark required fields
+schema.AddRequired("query")
+```
+
+### Property Ordering (Streaming UX)
+
+Properties are serialized in the order they're added. This matters for streaming - the LLM may emit fields in schema order:
+
+```go
+// Ensure "path" appears before "content" in streamed output
+schema.AddProperty("path", llm.PropertySchema{...}, -1)     // First
+schema.AddProperty("content", llm.PropertySchema{...}, -1)  // Second
 ```
 
 ## Tool Execution
@@ -347,18 +371,24 @@ See [streaming.md](streaming.md) for complete streaming patterns.
 
 ## API Reference
 
+**Schema builders:**
+- `NewToolInputSchema() ToolInputSchema` - Create empty schema
+- `schema.AddProperty(name, PropertySchema, position)` - Add property (-1 = append)
+- `schema.AddRequired(name)` - Mark field as required
+- `IntPtr(i int) *int` - Helper for Minimum/Maximum fields
+
 **Factory functions:**
 - `NewSearchTool() (*Tool, error)` - Web search tool
 - `NewTextEditorTool() (*Tool, error)` - Text editor tool
 - `NewBashTool() (*Tool, error)` - Bash execution tool
-- `NewCustomTool(name, description, parameters) (*Tool, error)` - Custom tool
+- `NewCustomTool(name, description, ToolInputSchema) (*Tool, error)` - Custom tool
 
 **Block helpers:**
 - `block.GetToolUseID() (string, bool)` - Extract tool_use_id
 - `block.GetToolName() (string, bool)` - Extract tool_name
 - `block.GetToolInput() (map[string]interface{}, bool)` - Extract input
 
-**See:** `tools.go`, `tool_types.go`, `types.go`
+**See:** `schema.go`, `tools.go`, `tool_types.go`, `types.go`
 
 ## Examples
 

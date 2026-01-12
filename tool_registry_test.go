@@ -20,7 +20,7 @@ func mockToolFactory(name string) func() (*Tool, error) {
 			Function: FunctionDetails{
 				Name:        name,
 				Description: "Mock tool: " + name,
-				Parameters:  map[string]interface{}{"type": "object"},
+				Parameters:  NewToolInputSchema(),
 			},
 		}, nil
 	}

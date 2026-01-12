@@ -11,21 +11,19 @@ import (
 //   - OpenAI: Uses function calling with this schema
 //   - Gemini: Uses FunctionDeclaration
 func NewSearchTool() (*Tool, error) {
+	schema := NewToolInputSchema()
+	schema.AddProperty("query", PropertySchema{
+		Type:        "string",
+		Description: "The search query",
+	}, -1)
+	schema.AddRequired("query")
+
 	tool := &Tool{
 		Type: "function",
 		Function: FunctionDetails{
 			Name:        "search",
 			Description: "Search the web for current information",
-			Parameters: map[string]interface{}{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"query": map[string]interface{}{
-						"type":        "string",
-						"description": "The search query",
-					},
-				},
-				"required": []string{"query"},
-			},
+			Parameters:  schema,
 		},
 		ExecutionSide: ExecutionSideProvider, // Provider executes (e.g., Anthropic's built-in web_search)
 	}
@@ -40,25 +38,24 @@ func NewSearchTool() (*Tool, error) {
 // NewTextEditorTool creates a text editor tool (OpenAI format).
 // This is a backend-side tool for editing files (executed by our backend).
 func NewTextEditorTool() (*Tool, error) {
+	schema := NewToolInputSchema()
+	schema.AddProperty("path", PropertySchema{
+		Type:        "string",
+		Description: "Path to the file to edit",
+	}, -1)
+	schema.AddProperty("command", PropertySchema{
+		Type:        "string",
+		Description: "Editor command to execute",
+	}, -1)
+	schema.AddRequired("path")
+	schema.AddRequired("command")
+
 	tool := &Tool{
 		Type: "function",
 		Function: FunctionDetails{
 			Name:        "text_editor",
 			Description: "Edit text files (backend execution)",
-			Parameters: map[string]interface{}{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"path": map[string]interface{}{
-						"type":        "string",
-						"description": "Path to the file to edit",
-					},
-					"command": map[string]interface{}{
-						"type":        "string",
-						"description": "Editor command to execute",
-					},
-				},
-				"required": []string{"path", "command"},
-			},
+			Parameters:  schema,
 		},
 		ExecutionSide: ExecutionSideServer, // Backend executes
 	}
@@ -73,21 +70,19 @@ func NewTextEditorTool() (*Tool, error) {
 // NewBashTool creates a bash command execution tool (OpenAI format).
 // This is a backend-side tool for executing shell commands (executed by our backend).
 func NewBashTool() (*Tool, error) {
+	schema := NewToolInputSchema()
+	schema.AddProperty("command", PropertySchema{
+		Type:        "string",
+		Description: "The bash command to execute",
+	}, -1)
+	schema.AddRequired("command")
+
 	tool := &Tool{
 		Type: "function",
 		Function: FunctionDetails{
 			Name:        "bash",
 			Description: "Execute bash commands (backend execution)",
-			Parameters: map[string]interface{}{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"command": map[string]interface{}{
-						"type":        "string",
-						"description": "The bash command to execute",
-					},
-				},
-				"required": []string{"command"},
-			},
+			Parameters:  schema,
 		},
 		ExecutionSide: ExecutionSideServer, // Backend executes
 	}
@@ -106,31 +101,28 @@ func NewBashTool() (*Tool, error) {
 // Parameters:
 //   - name: Function name (required)
 //   - description: What the function does (required)
-//   - parameters: JSON Schema object defining function parameters (required)
+//   - schema: ToolInputSchema defining function parameters (required)
 //
-// Example parameters:
+// Example:
 //
-//	map[string]interface{}{
-//	  "type": "object",
-//	  "properties": map[string]interface{}{
-//	    "location": map[string]interface{}{
-//	      "type": "string",
-//	      "description": "The city and state, e.g. San Francisco, CA",
-//	    },
-//	    "unit": map[string]interface{}{
-//	      "type": "string",
-//	      "enum": []string{"celsius", "fahrenheit"},
-//	    },
-//	  },
-//	  "required": []string{"location"},
-//	}
-func NewCustomTool(name string, description string, parameters map[string]interface{}) (*Tool, error) {
-	return NewCustomToolWithSide(name, description, parameters, ExecutionSideServer)
+//	schema := NewToolInputSchema()
+//	schema.AddProperty("location", PropertySchema{
+//	    Type:        "string",
+//	    Description: "The city and state, e.g. San Francisco, CA",
+//	}, -1)
+//	schema.AddProperty("unit", PropertySchema{
+//	    Type: "string",
+//	    Enum: []string{"celsius", "fahrenheit"},
+//	}, -1)
+//	schema.AddRequired("location")
+//	tool, err := NewCustomTool("get_weather", "Get the weather", schema)
+func NewCustomTool(name string, description string, schema ToolInputSchema) (*Tool, error) {
+	return NewCustomToolWithSide(name, description, schema, ExecutionSideServer)
 }
 
 // NewCustomToolWithSide creates a custom function tool with explicit execution side.
 // Use this when you need to specify where the tool is executed (Provider, Server, or Client).
-func NewCustomToolWithSide(name string, description string, parameters map[string]interface{}, executionSide ExecutionSide) (*Tool, error) {
+func NewCustomToolWithSide(name string, description string, schema ToolInputSchema, executionSide ExecutionSide) (*Tool, error) {
 	if name == "" {
 		return nil, errors.New("tool name is required")
 	}
@@ -139,16 +131,12 @@ func NewCustomToolWithSide(name string, description string, parameters map[strin
 		return nil, errors.New("tool description is required")
 	}
 
-	if parameters == nil {
-		return nil, errors.New("parameters are required")
-	}
-
 	tool := &Tool{
 		Type: "function",
 		Function: FunctionDetails{
 			Name:        name,
 			Description: description,
-			Parameters:  parameters,
+			Parameters:  schema,
 		},
 		ExecutionSide: executionSide,
 	}

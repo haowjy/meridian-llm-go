@@ -533,7 +533,7 @@ func (p *Provider) streamToolUseBlockFromBuiltIn(ctx context.Context, eventChan 
 		}
 	default:
 		// Custom tool - use parameters schema if available
-		if tool.Function.Parameters != nil {
+		if len(tool.Function.Parameters.Properties.Values) > 0 {
 			// Generate mock values based on schema
 			input = map[string]interface{}{
 				"param1": "lorem",

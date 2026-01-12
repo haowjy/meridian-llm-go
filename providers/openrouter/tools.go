@@ -59,17 +59,13 @@ func convertSearchTool(tool *llmprovider.Tool) (Tool, error) {
 
 // convertCustomTool converts a custom function tool to OpenRouter format.
 // OpenRouter uses OpenAI format, so this is a direct mapping.
+// ToolInputSchema marshals to the correct JSON structure automatically.
 func convertCustomTool(tool *llmprovider.Tool) (Tool, error) {
-	// Extract parameters (already in JSON Schema format)
-	parameters := tool.Function.Parameters
-	if parameters == nil {
-		parameters = make(map[string]interface{})
-	}
-
 	// Build function definition
+	// ToolInputSchema implements MarshalJSON for proper JSON output
 	funcDef := FunctionDefinition{
 		Name:       tool.Function.Name,
-		Parameters: parameters,
+		Parameters: tool.Function.Parameters,
 	}
 
 	// Add description if present
