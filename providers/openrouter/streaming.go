@@ -88,22 +88,30 @@ func emitStreamingBlocks(
 		// Emit complete thinking block
 		if thinkingContent.Len() > 0 {
 			thinkingText := thinkingContent.String()
-			block := &llmprovider.Block{
-				BlockType:   llmprovider.BlockTypeThinking,
-				Sequence:    state.CurrentIndex,
-				TextContent: &thinkingText,
-				Provider:    &providerIDStr,
-			}
-
-			// Preserve accumulated ReasoningDetails for replay
-			if thinkingDetails != nil && len(*thinkingDetails) > 0 {
-				providerData, err := json.Marshal(*thinkingDetails)
-				if err == nil {
-					block.ProviderData = providerData
+			if strings.TrimSpace(thinkingText) == "" {
+				thinkingContent.Reset()
+				if thinkingDetails != nil {
+					*thinkingDetails = nil
 				}
-			}
+				// Continue processing (e.g., start next text block) without emitting an empty thinking block.
+			} else {
+				block := &llmprovider.Block{
+					BlockType:   llmprovider.BlockTypeThinking,
+					Sequence:    state.CurrentIndex,
+					TextContent: &thinkingText,
+					Provider:    &providerIDStr,
+				}
 
-			eventChan <- llmprovider.StreamEvent{Block: block}
+				// Preserve accumulated ReasoningDetails for replay
+				if thinkingDetails != nil && len(*thinkingDetails) > 0 {
+					providerData, err := json.Marshal(*thinkingDetails)
+					if err == nil {
+						block.ProviderData = providerData
+					}
+				}
+
+				eventChan <- llmprovider.StreamEvent{Block: block}
+			}
 		}
 	}
 
@@ -250,9 +258,9 @@ func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventCh
 	state := BlockState{CurrentIndex: 0}
 
 	// Accumulators for complete block content (needed for persistence)
-	var thinkingContent strings.Builder       // Accumulate thinking text for complete block
-	var textContent strings.Builder           // Accumulate text content for complete block
-	var thinkingDetails *[]ReasoningDetail    // Accumulate reasoning details for replay to OpenRouter
+	var thinkingContent strings.Builder    // Accumulate thinking text for complete block
+	var textContent strings.Builder        // Accumulate text content for complete block
+	var thinkingDetails *[]ReasoningDetail // Accumulate reasoning details for replay to OpenRouter
 
 	// Keep these for metadata and tool calls
 	toolCallsMap := make(map[int]*accumulatedToolCall) // index -> accumulated tool call
@@ -483,23 +491,25 @@ finalize:
 	// Emit complete thinking block if it was started (for persistence)
 	if state.CurrentType == "thinking" && thinkingContent.Len() > 0 {
 		thinkingText := thinkingContent.String()
-		block := &llmprovider.Block{
-			BlockType:   llmprovider.BlockTypeThinking,
-			Sequence:    state.CurrentIndex,
-			TextContent: &thinkingText,
-			Provider:    &providerIDStr,
-		}
-
-		// Preserve accumulated ReasoningDetails for replay
-		if thinkingDetails != nil && len(*thinkingDetails) > 0 {
-			providerData, err := json.Marshal(*thinkingDetails)
-			if err == nil {
-				block.ProviderData = providerData
+		if strings.TrimSpace(thinkingText) != "" {
+			block := &llmprovider.Block{
+				BlockType:   llmprovider.BlockTypeThinking,
+				Sequence:    state.CurrentIndex,
+				TextContent: &thinkingText,
+				Provider:    &providerIDStr,
 			}
-		}
 
-		eventChan <- llmprovider.StreamEvent{Block: block}
-		state.CurrentIndex++
+			// Preserve accumulated ReasoningDetails for replay
+			if thinkingDetails != nil && len(*thinkingDetails) > 0 {
+				providerData, err := json.Marshal(*thinkingDetails)
+				if err == nil {
+					block.ProviderData = providerData
+				}
+			}
+
+			eventChan <- llmprovider.StreamEvent{Block: block}
+			state.CurrentIndex++
+		}
 	}
 
 	// Emit complete text block if it was started (for persistence)

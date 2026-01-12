@@ -83,7 +83,7 @@ func extractThinkingInfo(details []ReasoningDetail) *ThinkingInfo {
 			if detail.Summary != nil && *detail.Summary != "" {
 				text.WriteString(*detail.Summary)
 			}
-		// Skip "reasoning.encrypted" - we can't use encrypted data
+			// Skip "reasoning.encrypted" - we can't use encrypted data
 		}
 	}
 
@@ -92,6 +92,11 @@ func extractThinkingInfo(details []ReasoningDetail) *ThinkingInfo {
 	}
 
 	result := text.String()
+	// Guard against providers/models that emit placeholder reasoning such as "\n".
+	// Whitespace-only "thinking" should not create a persisted thinking block.
+	if strings.TrimSpace(result) == "" {
+		return nil
+	}
 	return &ThinkingInfo{
 		Text:            result,
 		OriginalDetails: details, // Preserve for replay to OpenRouter
@@ -428,7 +433,7 @@ func convertMessageToOpenRouter(msg llmprovider.Message, msgIndex int) ([]Messag
 			toolUseBlocks = append(toolUseBlocks, block)
 		case llmprovider.BlockTypeToolResult:
 			toolResultBlocks = append(toolResultBlocks, block)
-		// Skip web_search blocks - they're provider-specific and will be replayed from ProviderData if needed
+			// Skip web_search blocks - they're provider-specific and will be replayed from ProviderData if needed
 		}
 	}
 
