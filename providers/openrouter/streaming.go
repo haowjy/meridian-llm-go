@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/haowjy/meridian-llm-go"
+	llmprovider "github.com/haowjy/meridian-llm-go"
 )
 
 // DefaultStreamingIdleTimeout is the default timeout for SSE streaming.
@@ -72,7 +72,6 @@ func emitStreamingBlocks(
 	state *BlockState,
 	thinkingContent *strings.Builder,
 	textContent *strings.Builder,
-	thinkingDetails *[]ReasoningDetail,
 	dbg streamDebug,
 	eventChan chan<- llmprovider.StreamEvent,
 ) error {
@@ -107,9 +106,6 @@ func emitStreamingBlocks(
 			thinkingText := thinkingContent.String()
 			if strings.TrimSpace(thinkingText) == "" {
 				thinkingContent.Reset()
-				if thinkingDetails != nil {
-					*thinkingDetails = nil
-				}
 				// Continue processing (e.g., start next text block) without emitting an empty thinking block.
 			} else {
 				block := &llmprovider.Block{
@@ -119,13 +115,8 @@ func emitStreamingBlocks(
 					Provider:    &providerIDStr,
 				}
 
-				// Preserve accumulated ReasoningDetails for replay
-				if thinkingDetails != nil && len(*thinkingDetails) > 0 {
-					providerData, err := json.Marshal(*thinkingDetails)
-					if err == nil {
-						block.ProviderData = providerData
-					}
-				}
+				// No provider_data for OpenRouter reasoning
+				// Reconstruction from TextContent via convertThinkingToReasoningDetails()
 
 				eventChan <- llmprovider.StreamEvent{Block: block}
 			}
@@ -278,9 +269,8 @@ func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventCh
 	state := BlockState{CurrentIndex: 0}
 
 	// Accumulators for complete block content (needed for persistence)
-	var thinkingContent strings.Builder    // Accumulate thinking text for complete block
-	var textContent strings.Builder        // Accumulate text content for complete block
-	var thinkingDetails *[]ReasoningDetail // Accumulate reasoning details for replay to OpenRouter
+	var thinkingContent strings.Builder // Accumulate thinking text for complete block
+	var textContent strings.Builder     // Accumulate text content for complete block
 
 	// Keep these for metadata and tool calls
 	toolCallsMap := make(map[int]*accumulatedToolCall) // index -> accumulated tool call
@@ -408,20 +398,12 @@ func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventCh
 				delta.Content,
 			)
 
-			// Accumulate reasoning details for thinking blocks (for replay to OpenRouter)
-			if len(delta.ReasoningDetails) > 0 {
-				if thinkingDetails == nil {
-					thinkingDetails = &[]ReasoningDetail{}
-				}
-				*thinkingDetails = append(*thinkingDetails, delta.ReasoningDetails...)
-			}
-
 			// Determine block transitions
 			transition := determineTransition(state, parsed)
 
 			// Emit blocks/deltas based on parsed data and transition
 			// Pass accumulators so complete blocks can be built for persistence
-			if err := emitStreamingBlocks(parsed, transition, &state, &thinkingContent, &textContent, thinkingDetails, dbg, eventChan); err != nil {
+			if err := emitStreamingBlocks(parsed, transition, &state, &thinkingContent, &textContent, dbg, eventChan); err != nil {
 				return err
 			}
 
@@ -543,13 +525,8 @@ finalize:
 				Provider:    &providerIDStr,
 			}
 
-			// Preserve accumulated ReasoningDetails for replay
-			if thinkingDetails != nil && len(*thinkingDetails) > 0 {
-				providerData, err := json.Marshal(*thinkingDetails)
-				if err == nil {
-					block.ProviderData = providerData
-				}
-			}
+			// No provider_data for OpenRouter reasoning
+			// Reconstruction from TextContent via convertThinkingToReasoningDetails()
 
 			eventChan <- llmprovider.StreamEvent{Block: block}
 			state.CurrentIndex++

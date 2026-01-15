@@ -26,8 +26,7 @@ type WebSearchInfo struct {
 
 // ThinkingInfo contains thinking/reasoning text extracted from reasoning_details.
 type ThinkingInfo struct {
-	Text            string            // Combined text from all reasoning_details (for UI display)
-	OriginalDetails []ReasoningDetail // Original structured reasoning for replay to OpenRouter
+	Text string // Combined text from all reasoning_details (for UI display)
 }
 
 // TextInfo contains text content extracted from content field.
@@ -98,8 +97,7 @@ func extractThinkingInfo(details []ReasoningDetail) *ThinkingInfo {
 		return nil
 	}
 	return &ThinkingInfo{
-		Text:            result,
-		OriginalDetails: details, // Preserve for replay to OpenRouter
+		Text: result,
 	}
 }
 
@@ -198,14 +196,8 @@ func buildNonStreamingBlocks(parsed *ParsedDelta, state *BlockState) ([]*llmprov
 			Provider:    &providerIDStr,
 		}
 
-		// Preserve original ReasoningDetails for perfect replay to OpenRouter
-		// This enables proper tool continuation for Claude models
-		if parsed.Thinking.OriginalDetails != nil && len(parsed.Thinking.OriginalDetails) > 0 {
-			providerData, err := json.Marshal(parsed.Thinking.OriginalDetails)
-			if err == nil {
-				block.ProviderData = providerData
-			}
-		}
+		// No provider_data for OpenRouter reasoning
+		// Reconstruction from TextContent via convertThinkingToReasoningDetails()
 
 		blocks = append(blocks, block)
 		state.CurrentIndex++
@@ -331,40 +323,30 @@ func mergeConsecutiveSameRoleMessages(messages []llmprovider.Message) []llmprovi
 	return merged
 }
 
-// ===== Thinking Block Replay Helpers =====
-
-// replayOpenRouterThinking reconstructs original ReasoningDetails from a thinking block's ProviderData.
-// Returns nil if ProviderData is empty or invalid (caller should fallback to normalized conversion).
-// Note: This function is used internally and errors are handled gracefully by falling back to normalized conversion.
-func replayOpenRouterThinking(block *llmprovider.Block) ([]ReasoningDetail, error) {
-	if !block.HasProviderData() {
-		// Not an error - just means no provider data available (expected for cross-provider blocks)
-		return nil, fmt.Errorf("no provider data")
-	}
-
-	var details []ReasoningDetail
-	if err := json.Unmarshal(block.ProviderData, &details); err != nil {
-		// Not logged - caller handles fallback gracefully
-		return nil, fmt.Errorf("invalid provider data: %w", err)
-	}
-
-	return details, nil
-}
+// ===== Thinking Block Helpers =====
 
 // convertThinkingToReasoningDetails converts a thinking block to ReasoningDetails array.
-// Tries to replay from ProviderData first (perfect replay), falls back to normalized text.
-// This enables proper tool continuation for Claude models via OpenRouter.
+// For OpenRouter: Always reconstructs from TextContent (no special metadata to preserve).
+// For other providers: Could use provider_data for signatures/metadata (future extension).
 func convertThinkingToReasoningDetails(block *llmprovider.Block) []ReasoningDetail {
-	// Strategy 1: Replay from ProviderData (if available and from OpenRouter)
-	if block.IsFromProvider(llmprovider.ProviderOpenRouter) && block.HasProviderData() {
-		if details, err := replayOpenRouterThinking(block); err == nil {
-			return details
+	// OpenRouter: Always reconstruct from text (no special metadata to preserve)
+	if block.IsFromProvider(llmprovider.ProviderOpenRouter) {
+		if block.TextContent == nil || *block.TextContent == "" {
+			return nil
 		}
-		// Fall through to normalized conversion if replay fails
+		return []ReasoningDetail{
+			{
+				Type: "reasoning.text",
+				Text: block.TextContent,
+			},
+		}
 	}
 
-	// Strategy 2: Convert from normalized TextContent
-	// Create synthetic ReasoningDetail from thinking text
+	// Other providers: Try provider_data first (e.g., Anthropic signatures)
+	// Future: Could add provider-specific replay logic here
+	// For now, fall through to text reconstruction
+
+	// Fallback: reconstruct from text
 	if block.TextContent == nil || *block.TextContent == "" {
 		return nil
 	}
@@ -377,7 +359,7 @@ func convertThinkingToReasoningDetails(block *llmprovider.Block) []ReasoningDeta
 	}
 }
 
-// ===== End of Thinking Block Replay Helpers =====
+// ===== End of Thinking Block Helpers =====
 
 // convertToOpenRouterMessages converts library messages to OpenRouter/OpenAI format.
 func (p *Provider) convertToOpenRouterMessages(messages []llmprovider.Message) ([]Message, error) {
