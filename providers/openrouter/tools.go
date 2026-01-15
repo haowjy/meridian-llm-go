@@ -8,7 +8,7 @@ import (
 
 // convertToOpenRouterTools converts library Tool format to OpenRouter format.
 // OpenRouter uses OpenAI-compatible format, so most tools pass through directly.
-func convertToOpenRouterTools(tools []llmprovider.Tool) ([]Tool, error) {
+func (p *Provider) convertToOpenRouterTools(tools []llmprovider.Tool) ([]Tool, error) {
 	if len(tools) == 0 {
 		return nil, nil
 	}
@@ -25,7 +25,7 @@ func convertToOpenRouterTools(tools []llmprovider.Tool) ([]Tool, error) {
 			// OpenRouter has a web plugin for search
 			// However, it's not universally supported across all models
 			// For now, convert it as a custom tool with search semantics
-			openrouterTool, err = convertSearchTool(&tool)
+			openrouterTool, err = p.convertSearchTool(&tool)
 
 		default:
 			// All other tools use standard OpenAI function format
@@ -33,6 +33,7 @@ func convertToOpenRouterTools(tools []llmprovider.Tool) ([]Tool, error) {
 		}
 
 		if err != nil {
+			p.logger.Error("tool conversion failed", "tool_index", i, "tool_name", tool.Function.Name, "error", err)
 			return nil, fmt.Errorf("tool %d (%s): %w", i, tool.Function.Name, err)
 		}
 
@@ -45,9 +46,10 @@ func convertToOpenRouterTools(tools []llmprovider.Tool) ([]Tool, error) {
 // convertSearchTool converts search tool to OpenRouter format.
 // OpenRouter supports web search through some models, but format varies.
 // We convert it as a standard function tool with search semantics.
-func convertSearchTool(tool *llmprovider.Tool) (Tool, error) {
+func (p *Provider) convertSearchTool(tool *llmprovider.Tool) (Tool, error) {
 	// Validate tool name
 	if tool.Function.Name != "search" {
+		p.logger.Error("expected search tool, got different name", "tool_name", tool.Function.Name)
 		return Tool{}, fmt.Errorf("expected search tool, got %s", tool.Function.Name)
 	}
 

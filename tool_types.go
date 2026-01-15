@@ -29,6 +29,7 @@ func NewSearchTool() (*Tool, error) {
 	}
 
 	if err := tool.Validate(); err != nil {
+		globalLogger.Error("failed to create search tool", "error", err)
 		return nil, fmt.Errorf("failed to create search tool: %w", err)
 	}
 
@@ -61,6 +62,7 @@ func NewTextEditorTool() (*Tool, error) {
 	}
 
 	if err := tool.Validate(); err != nil {
+		globalLogger.Error("failed to create text editor tool", "error", err)
 		return nil, fmt.Errorf("failed to create text editor tool: %w", err)
 	}
 
@@ -88,6 +90,7 @@ func NewBashTool() (*Tool, error) {
 	}
 
 	if err := tool.Validate(); err != nil {
+		globalLogger.Error("failed to create bash tool", "error", err)
 		return nil, fmt.Errorf("failed to create bash tool: %w", err)
 	}
 
@@ -142,6 +145,7 @@ func NewCustomToolWithSide(name string, description string, schema ToolInputSche
 	}
 
 	if err := tool.Validate(); err != nil {
+		globalLogger.Error("failed to create custom tool", "error", err)
 		return nil, fmt.Errorf("failed to create custom tool: %w", err)
 	}
 

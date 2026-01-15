@@ -53,7 +53,7 @@ func TestConvertCustomTool_RequiredCopiedFromStringSlice(t *testing.T) {
 		},
 	}
 
-	converted, err := convertCustomTool(&tool)
+	converted, err := testProvider().convertCustomTool(&tool)
 	if err != nil {
 		t.Fatalf("convertCustomTool() error = %v", err)
 	}

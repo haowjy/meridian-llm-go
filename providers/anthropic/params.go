@@ -11,10 +11,11 @@ import (
 
 // buildMessageParams constructs Anthropic API parameters from a GenerateRequest.
 // This function is shared between GenerateResponse and StreamResponse to avoid duplication.
-func buildMessageParams(req *llmprovider.GenerateRequest) (anthropic.MessageNewParams, error) {
+func (p *Provider) buildMessageParams(req *llmprovider.GenerateRequest) (anthropic.MessageNewParams, error) {
 	// Convert library messages to Anthropic format
-	messages, err := convertToAnthropicMessages(req.Messages)
+	messages, err := p.convertToAnthropicMessages(req.Messages)
 	if err != nil {
+		p.logger.Error("failed to convert messages", "error", err)
 		return anthropic.MessageNewParams{}, fmt.Errorf("failed to convert messages: %w", err)
 	}
 
@@ -67,6 +68,7 @@ func buildMessageParams(req *llmprovider.GenerateRequest) (anthropic.MessageNewP
 	if params.ThinkingEnabled != nil && *params.ThinkingEnabled {
 		budgetTokens, err := params.GetThinkingBudgetTokens()
 		if err != nil {
+			p.logger.Error("failed to get thinking budget", "error", err)
 			return anthropic.MessageNewParams{}, fmt.Errorf("failed to get thinking budget: %w", err)
 		}
 		if budgetTokens > 0 {
@@ -76,8 +78,9 @@ func buildMessageParams(req *llmprovider.GenerateRequest) (anthropic.MessageNewP
 
 	// Tools - convert tools to Anthropic format
 	if len(params.Tools) > 0 {
-		anthropicTools, err := convertToolsToAnthropicTools(params.Tools)
+		anthropicTools, err := p.convertToolsToAnthropicTools(params.Tools)
 		if err != nil {
+			p.logger.Error("failed to convert tools", "error", err)
 			return anthropic.MessageNewParams{}, fmt.Errorf("failed to convert tools: %w", err)
 		}
 		apiParams.Tools = anthropicTools
@@ -88,11 +91,13 @@ func buildMessageParams(req *llmprovider.GenerateRequest) (anthropic.MessageNewP
 		// Tool choice must be a *ToolChoice
 		toolChoice, ok := params.ToolChoice.(*llmprovider.ToolChoice)
 		if !ok {
+			p.logger.Error("tool_choice must be *llmprovider.ToolChoice")
 			return anthropic.MessageNewParams{}, fmt.Errorf("tool_choice must be *llmprovider.ToolChoice")
 		}
 
-		anthropicToolChoice, err := convertToolChoice(toolChoice)
+		anthropicToolChoice, err := p.convertToolChoice(toolChoice)
 		if err != nil {
+			p.logger.Error("failed to convert tool choice", "error", err)
 			return anthropic.MessageNewParams{}, fmt.Errorf("failed to convert tool choice: %w", err)
 		}
 
@@ -108,8 +113,8 @@ func buildMessageParams(req *llmprovider.GenerateRequest) (anthropic.MessageNewP
 // BuildMessageParamsDebug builds the Anthropic MessageNewParams for a GenerateRequest
 // and returns it as a generic JSON map for debugging/inspection. This does not perform
 // any network calls and is safe to use in debug-only tooling.
-func BuildMessageParamsDebug(req *llmprovider.GenerateRequest) (map[string]interface{}, error) {
-	apiParams, err := buildMessageParams(req)
+func (p *Provider) BuildMessageParamsDebug(req *llmprovider.GenerateRequest) (map[string]interface{}, error) {
+	apiParams, err := p.buildMessageParams(req)
 	if err != nil {
 		return nil, err
 	}
@@ -117,11 +122,13 @@ func BuildMessageParamsDebug(req *llmprovider.GenerateRequest) (map[string]inter
 	// Marshal to JSON using the SDK's types, then back into a map
 	jsonBytes, err := json.Marshal(apiParams)
 	if err != nil {
+		p.logger.Debug("failed to marshal anthropic params", "error", err)
 		return nil, fmt.Errorf("failed to marshal anthropic params: %w", err)
 	}
 
 	var result map[string]interface{}
 	if err := json.Unmarshal(jsonBytes, &result); err != nil {
+		p.logger.Debug("failed to unmarshal anthropic params", "error", err)
 		return nil, fmt.Errorf("failed to unmarshal anthropic params: %w", err)
 	}
 

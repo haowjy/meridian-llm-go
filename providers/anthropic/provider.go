@@ -3,6 +3,7 @@ package anthropic
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -13,20 +14,45 @@ import (
 
 // Provider implements the llmprovider.Provider interface for Anthropic (Claude) models.
 type Provider struct {
-	client *anthropic.Client
+	client          *anthropic.Client
+	logger          *slog.Logger
+	debugStreamLogs bool
+}
+
+type Option func(*Provider)
+
+func WithLogger(logger *slog.Logger) Option {
+	return func(p *Provider) {
+		if logger != nil {
+			p.logger = logger
+		}
+	}
+}
+
+func WithDebugStreamLogs(enabled bool) Option {
+	return func(p *Provider) {
+		p.debugStreamLogs = enabled
+	}
 }
 
 // NewProvider creates a new Anthropic provider with the given API key.
-func NewProvider(apiKey string) (*Provider, error) {
+func NewProvider(apiKey string, opts ...Option) (*Provider, error) {
 	if apiKey == "" {
 		return nil, llmprovider.ErrInvalidAPIKey
 	}
 
 	client := anthropic.NewClient(option.WithAPIKey(apiKey))
 
-	return &Provider{
+	p := &Provider{
 		client: &client,
-	}, nil
+		logger: slog.Default(),
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(p)
+		}
+	}
+	return p, nil
 }
 
 // Name returns the provider identifier.
@@ -53,7 +79,7 @@ func (p *Provider) GenerateResponse(ctx context.Context, req *llmprovider.Genera
 	}
 
 	// Build Anthropic API parameters (shared logic with StreamResponse)
-	apiParams, err := buildMessageParams(req)
+	apiParams, err := p.buildMessageParams(req)
 	if err != nil {
 		return nil, err
 	}
@@ -61,6 +87,7 @@ func (p *Provider) GenerateResponse(ctx context.Context, req *llmprovider.Genera
 	// Call Anthropic API
 	message, err := p.client.Messages.New(ctx, apiParams)
 	if err != nil {
+		p.logger.Error("anthropic API call failed", "model", req.Model, "error", err)
 		return nil, fmt.Errorf("anthropic API call failed: %w", err)
 	}
 
@@ -73,6 +100,7 @@ func (p *Provider) GenerateResponse(ctx context.Context, req *llmprovider.Genera
 	// Convert response to library format with metadata
 	response, err := p.convertFromAnthropicResponse(message, tools)
 	if err != nil {
+		p.logger.Error("failed to convert response", "error", err)
 		return nil, fmt.Errorf("failed to convert response: %w", err)
 	}
 

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -44,6 +45,23 @@ type Delta struct {
 	Annotations      []Annotation      `json:"annotations,omitempty"`       // Web search results from :online models
 }
 
+type streamDebug struct {
+	enabled bool
+	logger  *slog.Logger
+}
+
+func (d streamDebug) Debug(msg string, args ...any) {
+	if d.enabled && d.logger != nil {
+		d.logger.Debug(msg, args...)
+	}
+}
+
+func (d streamDebug) Warn(msg string, args ...any) {
+	if d.enabled && d.logger != nil {
+		d.logger.Warn(msg, args...)
+	}
+}
+
 // ===== Streaming Block Emitter (SOLID-compliant) =====
 
 // emitStreamingBlocks emits stream events based on parsed delta and state transition.
@@ -55,13 +73,14 @@ func emitStreamingBlocks(
 	thinkingContent *strings.Builder,
 	textContent *strings.Builder,
 	thinkingDetails *[]ReasoningDetail,
+	dbg streamDebug,
 	eventChan chan<- llmprovider.StreamEvent,
 ) error {
 	providerIDStr := llmprovider.ProviderOpenRouter.String()
 
 	// 1. Emit web search blocks (if present and not done)
 	if parsed.WebSearch != nil && !state.WebSearchDone {
-		fmt.Printf("[DEBUG] processing web search annotations: state.CurrentIndex=%d\n", state.CurrentIndex)
+		dbg.Debug("openrouter web search annotations received", "current_index", state.CurrentIndex)
 		blocks, err := convertAnnotationsToWebSearchBlocks(
 			parsed.WebSearch.Annotations,
 			state.CurrentIndex,
@@ -70,17 +89,15 @@ func emitStreamingBlocks(
 			return err
 		}
 
-		fmt.Printf("[DEBUG] emitting %d web search blocks\n", len(blocks))
 		for i, block := range blocks {
-			fmt.Printf("[DEBUG]   web search block %d: type=%s, sequence=%d\n", i, block.BlockType, block.Sequence)
+			dbg.Debug("openrouter web search block emitted", "index", i, "block_type", block.BlockType, "sequence", block.Sequence)
 			eventChan <- llmprovider.StreamEvent{Block: block}
 		}
 
 		oldIndex := state.CurrentIndex
 		state.CurrentIndex += len(blocks)
 		state.WebSearchDone = true
-		fmt.Printf("[DEBUG] updated state.CurrentIndex: %d -> %d (added %d web search blocks)\n",
-			oldIndex, state.CurrentIndex, len(blocks))
+		dbg.Debug("openrouter web search blocks applied", "old_index", oldIndex, "new_index", state.CurrentIndex, "added", len(blocks))
 	}
 
 	// 2. Close previous block if transition says so (emit complete block for persistence)
@@ -187,7 +204,7 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 	}
 
 	// Build OpenRouter API request (shared logic)
-	openrouterReq, err := buildChatCompletionRequest(req)
+	openrouterReq, err := p.buildChatCompletionRequest(req)
 	if err != nil {
 		return nil, err
 	}
@@ -206,6 +223,7 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 
 	resp, err := p.httpClient.Do(httpReq)
 	if err != nil {
+		p.logger.Error("openrouter HTTP request failed", "model", req.Model, "error", err)
 		return nil, fmt.Errorf("openrouter HTTP request failed: %w", err)
 	}
 
@@ -235,6 +253,8 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 // Uses idle timeout detection: if no data is received for DefaultStreamingIdleTimeout,
 // returns ErrStreamingIdleTimeout.
 func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventChan chan<- llmprovider.StreamEvent) error {
+	dbg := streamDebug{enabled: p.debugStreamLogs, logger: p.logger}
+
 	// Start line reader goroutine
 	lineChan := make(chan string, 10) // Buffered to avoid blocking scanner
 	scanErrChan := make(chan error, 1)
@@ -291,6 +311,7 @@ func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventCh
 
 		case <-idleTimer.C:
 			// No data received for too long - provider stalled
+			p.logger.Warn("streaming idle timeout", "timeout", DefaultStreamingIdleTimeout, "model", model)
 			return &llmprovider.ProviderError{
 				Code:      llmprovider.ErrorCodeStreamingIdleTimeout,
 				Provider:  llmprovider.ProviderOpenRouter.String(),
@@ -300,6 +321,7 @@ func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventCh
 			}
 
 		case err := <-scanErrChan:
+			p.logger.Error("error reading stream", "model", model, "error", err)
 			return fmt.Errorf("error reading stream: %w", err)
 
 		case line, ok := <-lineChan:
@@ -340,6 +362,7 @@ func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventCh
 					} `json:"error"`
 				}
 				if json.Unmarshal([]byte(data), &errResp) == nil && errResp.Error.Message != "" {
+					p.logger.Error("openrouter streaming error", "model", model, "error", errResp.Error.Message)
 					return fmt.Errorf("openrouter streaming error: %s", errResp.Error.Message)
 				}
 				// Ignore unparseable chunks (might be keep-alive or other messages)
@@ -361,6 +384,16 @@ func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventCh
 			// Capture generation ID (available in all chunks, capture from first)
 			if generationID == "" && chunk.ID != "" {
 				generationID = chunk.ID
+
+				// Emit non-terminal event immediately for early persistence
+				// This allows background enrichment even if stream is cancelled mid-way
+				eventChan <- llmprovider.StreamEvent{
+					GenerationIDDiscovered: &llmprovider.GenerationIDEvent{
+						GenerationID: chunk.ID,
+						Model:        model,
+						Provider:     "openrouter",
+					},
+				}
 			}
 
 			// Capture usage (typically only in last chunk)
@@ -388,23 +421,25 @@ func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventCh
 
 			// Emit blocks/deltas based on parsed data and transition
 			// Pass accumulators so complete blocks can be built for persistence
-			if err := emitStreamingBlocks(parsed, transition, &state, &thinkingContent, &textContent, thinkingDetails, eventChan); err != nil {
+			if err := emitStreamingBlocks(parsed, transition, &state, &thinkingContent, &textContent, thinkingDetails, dbg, eventChan); err != nil {
 				return err
 			}
 
 			// Process tool calls delta (keep existing logic - tool calls need accumulation)
 			if len(delta.ToolCalls) > 0 {
 				for _, toolCallDelta := range delta.ToolCalls {
-					// DEBUG: Print each tool call delta with actual index from OpenRouter
 					var indexFromOR string
 					if toolCallDelta.Index != nil {
 						indexFromOR = fmt.Sprintf("%d", *toolCallDelta.Index)
 					} else {
 						indexFromOR = "nil"
 					}
-					fmt.Printf("[DEBUG] processing tool call delta: openrouter_index=%s, id=%q, name=%q, args_len=%d, args_preview=%q\n",
-						indexFromOR, toolCallDelta.ID, toolCallDelta.Function.Name,
-						len(toolCallDelta.Function.Arguments), truncateString(toolCallDelta.Function.Arguments, 50))
+					dbg.Debug("openrouter tool call delta",
+						"openrouter_index", indexFromOR,
+						"id", toolCallDelta.ID,
+						"name", toolCallDelta.Function.Name,
+						"args_len", len(toolCallDelta.Function.Arguments),
+					)
 
 					// Determine the map index to use (priority order):
 					// 1. Use Index from OpenRouter if present (most reliable)
@@ -414,15 +449,15 @@ func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventCh
 					if toolCallDelta.Index != nil {
 						// Use actual index from OpenRouter response
 						idx = *toolCallDelta.Index
-						fmt.Printf("[DEBUG] using OpenRouter index: %d\n", idx)
+						dbg.Debug("openrouter tool call using provider index", "index", idx)
 					} else if existingIdx, exists := findToolCallIndex(toolCallsMap, toolCallDelta.ID); exists {
 						// Find existing by ID
 						idx = existingIdx
-						fmt.Printf("[DEBUG] found existing tool call by ID: id=%q, map_index=%d\n", toolCallDelta.ID, idx)
+						dbg.Debug("openrouter tool call matched existing id", "id", toolCallDelta.ID, "map_index", idx)
 					} else {
 						// Fallback: create new entry
 						idx = len(toolCallsMap)
-						fmt.Printf("[DEBUG] creating new tool call entry (fallback): id=%q, map_index=%d\n", toolCallDelta.ID, idx)
+						dbg.Debug("openrouter tool call created new entry (fallback)", "id", toolCallDelta.ID, "map_index", idx)
 					}
 
 					acc, exists := toolCallsMap[idx]
@@ -433,8 +468,13 @@ func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventCh
 
 						blockType := llmprovider.BlockTypeToolUse
 						blockIndex := state.CurrentIndex + 1 + idx
-						fmt.Printf("[DEBUG] emitting tool call START: map_index=%d, blockIndex=%d, state.CurrentIndex=%d, id=%q, name=%q\n",
-							idx, blockIndex, state.CurrentIndex, toolCallDelta.ID, toolCallDelta.Function.Name)
+						dbg.Debug("openrouter tool call start",
+							"map_index", idx,
+							"block_index", blockIndex,
+							"current_index", state.CurrentIndex,
+							"id", toolCallDelta.ID,
+							"name", toolCallDelta.Function.Name,
+						)
 						eventChan <- llmprovider.StreamEvent{
 							Delta: &llmprovider.BlockDelta{
 								BlockIndex:   blockIndex,
@@ -458,9 +498,13 @@ func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventCh
 						acc.Arguments.WriteString(toolCallDelta.Function.Arguments)
 						newLength := acc.Arguments.Len()
 
-						// DEBUG: Print Arguments accumulation
-						fmt.Printf("[DEBUG] accumulated tool call arguments: id=%q, map_index=%d, prev_len=%d, chunk_len=%d, new_total=%d, preview=%q\n",
-							acc.ID, idx, prevLength, len(toolCallDelta.Function.Arguments), newLength, truncateString(acc.Arguments.String(), 100))
+						dbg.Debug("openrouter tool call args accumulated",
+							"id", acc.ID,
+							"map_index", idx,
+							"prev_len", prevLength,
+							"chunk_len", len(toolCallDelta.Function.Arguments),
+							"new_total", newLength,
+						)
 
 						// Emit input JSON delta
 						blockIndex := state.CurrentIndex + 1 + idx
@@ -527,35 +571,35 @@ finalize:
 	}
 
 	// Tool call blocks (emit in order)
-	// DEBUG: Print toolCallsMap state before finalization
-	fmt.Printf("[DEBUG] finalizing tool calls: total=%d, state.CurrentIndex=%d\n", len(toolCallsMap), state.CurrentIndex)
-
-	// DEBUG: Dump entire toolCallsMap to see what indices exist
-	fmt.Printf("[DEBUG] toolCallsMap contents:\n")
-	for mapIdx, mapAcc := range toolCallsMap {
-		fmt.Printf("[DEBUG]   index=%d: id=%q, name=%q, args_len=%d\n",
-			mapIdx, mapAcc.ID, mapAcc.Name, mapAcc.Arguments.Len())
-	}
+	dbg.Debug("openrouter finalizing tool calls", "total", len(toolCallsMap), "current_index", state.CurrentIndex)
 
 	for idx := 0; idx < len(toolCallsMap); idx++ {
 		acc, exists := toolCallsMap[idx]
 		if !exists {
-			fmt.Printf("[DEBUG] WARNING: gap in toolCallsMap at index %d (this should not happen!)\n", idx)
+			dbg.Warn("openrouter toolCallsMap gap (unexpected)", "index", idx)
 			continue
 		}
 
-		// DEBUG: Print accumulated tool call before JSON parsing
+		dbg.Debug("openrouter tool call finalize",
+			"index", idx,
+			"id", acc.ID,
+			"name", acc.Name,
+			"args_len", acc.Arguments.Len(),
+		)
 		argStr := acc.Arguments.String()
-		fmt.Printf("[DEBUG] parsing accumulated tool call arguments: index=%d, id=%q, name=%q, args_len=%d, args_full=%q\n",
-			idx, acc.ID, acc.Name, acc.Arguments.Len(), argStr)
 
 		// Parse accumulated arguments
 		input := make(map[string]interface{})
 		if acc.Arguments.Len() > 0 {
 			if err := json.Unmarshal([]byte(argStr), &input); err != nil {
 				// Instead of aborting, emit recovery blocks so LLM can see error and retry
-				fmt.Printf("[WARN] malformed tool JSON, emitting recovery blocks: index=%d, id=%q, name=%q, error=%v\n",
-					idx, acc.ID, acc.Name, err)
+				dbg.Warn("openrouter malformed tool JSON, emitting recovery blocks",
+					"index", idx,
+					"id", acc.ID,
+					"name", acc.Name,
+					"args_len", acc.Arguments.Len(),
+					"error", err,
+				)
 
 				recovery, nextSeq := llmprovider.NewMalformedToolRecovery(
 					acc.ID, acc.Name, argStr, err,
@@ -567,8 +611,7 @@ finalize:
 				state.CurrentIndex = nextSeq
 				continue // Continue to next tool instead of aborting
 			}
-			fmt.Printf("[DEBUG] successfully parsed tool call arguments: index=%d, id=%q, name=%q, parsed_input=%v\n",
-				idx, acc.ID, acc.Name, input)
+			dbg.Debug("openrouter tool call args parsed successfully", "index", idx, "id", acc.ID, "name", acc.Name)
 		}
 
 		content := map[string]interface{}{
@@ -631,16 +674,4 @@ func findToolCallIndex(toolCallsMap map[int]*accumulatedToolCall, id string) (in
 		}
 	}
 	return 0, false
-}
-
-// truncateString truncates a string to maxLen characters, adding "..." if truncated.
-// Used for debug logging to prevent excessive log output.
-func truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	if maxLen <= 3 {
-		return "..."
-	}
-	return s[:maxLen-3] + "..."
 }

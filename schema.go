@@ -75,10 +75,12 @@ func (o OrderedProperties) MarshalJSON() ([]byte, error) {
 	writeKV := func(k string, v PropertySchema) error {
 		keyBytes, err := json.Marshal(k)
 		if err != nil {
+			globalLogger.Error("marshal key", "error", err)
 			return fmt.Errorf("marshal key: %w", err)
 		}
 		valBytes, err := json.Marshal(v)
 		if err != nil {
+			globalLogger.Error("marshal value", "key", k, "error", err)
 			return fmt.Errorf("marshal value for %q: %w", k, err)
 		}
 

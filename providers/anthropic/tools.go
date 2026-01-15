@@ -10,7 +10,7 @@ import (
 
 // convertToolsToAnthropicTools converts library Tool format to Anthropic SDK format.
 // This function knows the Anthropic API format and hardcodes the mappings.
-func convertToolsToAnthropicTools(tools []llmprovider.Tool) ([]anthropic.ToolUnionParam, error) {
+func (p *Provider) convertToolsToAnthropicTools(tools []llmprovider.Tool) ([]anthropic.ToolUnionParam, error) {
 	if len(tools) == 0 {
 		return nil, nil
 	}
@@ -24,20 +24,21 @@ func convertToolsToAnthropicTools(tools []llmprovider.Tool) ([]anthropic.ToolUni
 		// Route based on function name (OpenAI format uses tool.Function.Name)
 		switch tool.Function.Name {
 		case "search":
-			anthropicTool, err = convertSearchTool(&tool)
+			anthropicTool, err = p.convertSearchTool(&tool)
 
 		case "text_editor":
-			anthropicTool, err = convertTextEditorTool(&tool)
+			anthropicTool, err = p.convertTextEditorTool(&tool)
 
 		case "bash":
-			anthropicTool, err = convertBashTool(&tool)
+			anthropicTool, err = p.convertBashTool(&tool)
 
 		default:
 			// All other tools are custom function tools
-			anthropicTool, err = convertCustomTool(&tool)
+			anthropicTool, err = p.convertCustomTool(&tool)
 		}
 
 		if err != nil {
+			p.logger.Error("failed to convert tool", "tool_index", i, "tool_name", tool.Function.Name, "error", err)
 			return nil, fmt.Errorf("tool %d (%s): %w", i, tool.Function.Name, err)
 		}
 
@@ -49,9 +50,10 @@ func convertToolsToAnthropicTools(tools []llmprovider.Tool) ([]anthropic.ToolUni
 
 // convertSearchTool converts search tool to Anthropic web_search format.
 // Anthropic search is server-side executed.
-func convertSearchTool(tool *llmprovider.Tool) (anthropic.ToolUnionParam, error) {
+func (p *Provider) convertSearchTool(tool *llmprovider.Tool) (anthropic.ToolUnionParam, error) {
 	// Validate tool name (OpenAI format uses tool.Function.Name)
 	if tool.Function.Name != "search" {
+		p.logger.Error("unexpected tool name for search tool", "tool_name", tool.Function.Name)
 		return anthropic.ToolUnionParam{}, fmt.Errorf("expected search tool, got %s", tool.Function.Name)
 	}
 
@@ -67,9 +69,10 @@ func convertSearchTool(tool *llmprovider.Tool) (anthropic.ToolUnionParam, error)
 
 // convertTextEditorTool converts text_editor tool to Anthropic text editor format.
 // Anthropic text editor is client-side executed.
-func convertTextEditorTool(tool *llmprovider.Tool) (anthropic.ToolUnionParam, error) {
+func (p *Provider) convertTextEditorTool(tool *llmprovider.Tool) (anthropic.ToolUnionParam, error) {
 	// Validate tool name (OpenAI format uses tool.Function.Name)
 	if tool.Function.Name != "text_editor" {
+		p.logger.Error("unexpected tool name for text_editor tool", "tool_name", tool.Function.Name)
 		return anthropic.ToolUnionParam{}, fmt.Errorf("expected text_editor tool, got %s", tool.Function.Name)
 	}
 
@@ -85,9 +88,10 @@ func convertTextEditorTool(tool *llmprovider.Tool) (anthropic.ToolUnionParam, er
 
 // convertBashTool converts bash/code execution tool to Anthropic bash format.
 // Anthropic bash is client-side executed.
-func convertBashTool(tool *llmprovider.Tool) (anthropic.ToolUnionParam, error) {
+func (p *Provider) convertBashTool(tool *llmprovider.Tool) (anthropic.ToolUnionParam, error) {
 	// Validate tool name (OpenAI format uses tool.Function.Name)
 	if tool.Function.Name != "bash" {
+		p.logger.Error("unexpected tool name for bash tool", "tool_name", tool.Function.Name)
 		return anthropic.ToolUnionParam{}, fmt.Errorf("expected bash tool, got %s", tool.Function.Name)
 	}
 
@@ -103,7 +107,7 @@ func convertBashTool(tool *llmprovider.Tool) (anthropic.ToolUnionParam, error) {
 // convertCustomTool converts custom function tool to Anthropic custom tool format.
 // Custom tools are client-side executed.
 // Converts typed ToolInputSchema → Anthropic format (input_schema).
-func convertCustomTool(tool *llmprovider.Tool) (anthropic.ToolUnionParam, error) {
+func (p *Provider) convertCustomTool(tool *llmprovider.Tool) (anthropic.ToolUnionParam, error) {
 	// With typed ToolInputSchema, we have direct access to all fields.
 	// No more type assertions needed - the schema is already properly typed.
 	params := tool.Function.Parameters
@@ -133,13 +137,14 @@ func convertCustomTool(tool *llmprovider.Tool) (anthropic.ToolUnionParam, error)
 
 // convertToolChoice converts library ToolChoice to Anthropic format.
 // Returns nil if no tool choice specified (lets provider decide).
-func convertToolChoice(choice *llmprovider.ToolChoice) (*anthropic.ToolChoiceUnionParam, error) {
+func (p *Provider) convertToolChoice(choice *llmprovider.ToolChoice) (*anthropic.ToolChoiceUnionParam, error) {
 	if choice == nil {
 		return nil, nil
 	}
 
 	// Validate tool choice
 	if err := choice.Validate(); err != nil {
+		p.logger.Error("invalid tool choice", "error", err)
 		return nil, fmt.Errorf("invalid tool choice: %w", err)
 	}
 
@@ -167,6 +172,7 @@ func convertToolChoice(choice *llmprovider.ToolChoice) (*anthropic.ToolChoiceUni
 	case llmprovider.ToolChoiceModeSpecific:
 		// Specific mode: must use specific tool
 		if choice.ToolName == nil || *choice.ToolName == "" {
+			p.logger.Error("tool_name required for specific mode")
 			return nil, fmt.Errorf("tool_name required for specific mode")
 		}
 
@@ -175,6 +181,7 @@ func convertToolChoice(choice *llmprovider.ToolChoice) (*anthropic.ToolChoiceUni
 		return &unionParam, nil
 
 	default:
+		p.logger.Error("unsupported tool choice mode", "mode", choice.Mode)
 		return nil, fmt.Errorf("unsupported tool choice mode: %s", choice.Mode)
 	}
 }

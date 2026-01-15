@@ -222,11 +222,13 @@ func GetRequestParamStruct(params map[string]interface{}) (*RequestParams, error
 
 	jsonBytes, err := json.Marshal(params)
 	if err != nil {
+		globalLogger.Error("failed to marshal params", "error", err)
 		return nil, fmt.Errorf("failed to marshal params: %w", err)
 	}
 
 	var rp RequestParams
 	if err := json.Unmarshal(jsonBytes, &rp); err != nil {
+		globalLogger.Error("failed to unmarshal params", "error", err)
 		return nil, fmt.Errorf("failed to unmarshal params: %w", err)
 	}
 
@@ -269,6 +271,7 @@ func ConvertEffortToBudget(effort string) (int, error) {
 
 	budget, ok := budgets[effort]
 	if !ok {
+		globalLogger.Error("unknown effort level", "effort", effort)
 		return 0, fmt.Errorf("unknown effort level: %s (valid: low, medium, high)", effort)
 	}
 

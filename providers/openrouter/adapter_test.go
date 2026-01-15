@@ -6,6 +6,12 @@ import (
 	"github.com/haowjy/meridian-llm-go"
 )
 
+// testProvider creates a test provider instance for testing conversion functions
+func testProvider() *Provider {
+	p, _ := NewProvider("test-key")
+	return p
+}
+
 // TestConvertToOpenRouterMessages_SimpleText tests basic text message conversion
 func TestConvertToOpenRouterMessages_SimpleText(t *testing.T) {
 	text := "Hello, world!"
@@ -22,7 +28,8 @@ func TestConvertToOpenRouterMessages_SimpleText(t *testing.T) {
 		},
 	}
 
-	result, err := convertToOpenRouterMessages(messages)
+	p := testProvider()
+	result, err := p.convertToOpenRouterMessages(messages)
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
@@ -61,7 +68,8 @@ func TestConvertToOpenRouterMessages_ToolUse(t *testing.T) {
 		},
 	}
 
-	result, err := convertToOpenRouterMessages(messages)
+	p := testProvider()
+	result, err := p.convertToOpenRouterMessages(messages)
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
@@ -101,7 +109,8 @@ func TestConvertToOpenRouterMessages_MissingToolUseID(t *testing.T) {
 		},
 	}
 
-	_, err := convertToOpenRouterMessages(messages)
+	p := testProvider()
+	_, err := p.convertToOpenRouterMessages(messages)
 	if err == nil {
 		t.Error("expected error for missing tool_use_id, got nil")
 	}
@@ -130,7 +139,8 @@ func TestConvertFromChatCompletionResponse(t *testing.T) {
 		},
 	}
 
-	result, err := convertFromChatCompletionResponse(resp)
+	p := testProvider()
+	result, err := p.convertFromChatCompletionResponse(resp)
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}

@@ -146,10 +146,11 @@ type Usage struct {
 
 // buildChatCompletionRequest constructs an OpenRouter API request from a GenerateRequest.
 // This function is shared between GenerateResponse and StreamResponse to avoid duplication.
-func buildChatCompletionRequest(req *llmprovider.GenerateRequest) (*ChatCompletionRequest, error) {
+func (p *Provider) buildChatCompletionRequest(req *llmprovider.GenerateRequest) (*ChatCompletionRequest, error) {
 	// Convert library messages to OpenRouter format
-	messages, err := convertToOpenRouterMessages(req.Messages)
+	messages, err := p.convertToOpenRouterMessages(req.Messages)
 	if err != nil {
+		p.logger.Error("failed to convert messages", "model", req.Model, "error", err)
 		return nil, fmt.Errorf("failed to convert messages: %w", err)
 	}
 
@@ -193,8 +194,9 @@ func buildChatCompletionRequest(req *llmprovider.GenerateRequest) (*ChatCompleti
 
 	// Tools
 	if len(params.Tools) > 0 {
-		openrouterTools, err := convertToOpenRouterTools(params.Tools)
+		openrouterTools, err := p.convertToOpenRouterTools(params.Tools)
 		if err != nil {
+			p.logger.Error("failed to convert tools", "model", req.Model, "error", err)
 			return nil, fmt.Errorf("failed to convert tools: %w", err)
 		}
 		openrouterReq.Tools = openrouterTools
@@ -202,8 +204,9 @@ func buildChatCompletionRequest(req *llmprovider.GenerateRequest) (*ChatCompleti
 
 	// Tool choice
 	if params.ToolChoice != nil {
-		toolChoice, err := convertToolChoice(params.ToolChoice)
+		toolChoice, err := p.convertToolChoice(params.ToolChoice)
 		if err != nil {
+			p.logger.Error("failed to convert tool choice", "model", req.Model, "error", err)
 			return nil, fmt.Errorf("failed to convert tool choice: %w", err)
 		}
 		openrouterReq.ToolChoice = toolChoice
@@ -233,9 +236,9 @@ func buildChatCompletionRequest(req *llmprovider.GenerateRequest) (*ChatCompleti
 // and returns it as a map[string]interface{} for inspection.
 //
 // This is used by debug endpoints to show the exact JSON that would be sent to OpenRouter's API.
-func BuildChatCompletionRequestDebug(req *llmprovider.GenerateRequest) (map[string]interface{}, error) {
+func (p *Provider) BuildChatCompletionRequestDebug(req *llmprovider.GenerateRequest) (map[string]interface{}, error) {
 	// Build the ChatCompletionRequest using the same logic as GenerateResponse
-	chatReq, err := buildChatCompletionRequest(req)
+	chatReq, err := p.buildChatCompletionRequest(req)
 	if err != nil {
 		return nil, err
 	}
@@ -243,12 +246,14 @@ func BuildChatCompletionRequestDebug(req *llmprovider.GenerateRequest) (map[stri
 	// Marshal to JSON using OpenRouter's struct tags (which use "parameters" not "input_schema")
 	jsonBytes, err := json.Marshal(chatReq)
 	if err != nil {
+		p.logger.Debug("failed to marshal openrouter request", "model", req.Model, "error", err)
 		return nil, fmt.Errorf("failed to marshal openrouter request: %w", err)
 	}
 
 	// Unmarshal back into a map for flexible inspection
 	var result map[string]interface{}
 	if err := json.Unmarshal(jsonBytes, &result); err != nil {
+		p.logger.Debug("failed to unmarshal openrouter request", "model", req.Model, "error", err)
 		return nil, fmt.Errorf("failed to unmarshal openrouter request: %w", err)
 	}
 
@@ -256,7 +261,7 @@ func BuildChatCompletionRequestDebug(req *llmprovider.GenerateRequest) (map[stri
 }
 
 // convertToolChoice converts library tool choice to OpenRouter format.
-func convertToolChoice(choice interface{}) (interface{}, error) {
+func (p *Provider) convertToolChoice(choice interface{}) (interface{}, error) {
 	// Check for nil first
 	if choice == nil {
 		return "auto", nil
@@ -278,6 +283,7 @@ func convertToolChoice(choice interface{}) (interface{}, error) {
 			return "none", nil
 		case llmprovider.ToolChoiceModeSpecific:
 			if tc.ToolName == nil {
+				p.logger.Error("specific tool choice requires tool_name")
 				return nil, fmt.Errorf("specific tool choice requires tool_name")
 			}
 			return map[string]interface{}{

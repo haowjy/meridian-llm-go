@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -16,14 +16,39 @@ import (
 // Provider is a mock LLM provider that generates lorem ipsum text.
 // Used for testing and development without requiring real API keys.
 type Provider struct {
-	generator *loremgen.Lorem
+	generator       *loremgen.Lorem
+	logger          *slog.Logger
+	debugStreamLogs bool
+}
+
+type Option func(*Provider)
+
+func WithLogger(logger *slog.Logger) Option {
+	return func(p *Provider) {
+		if logger != nil {
+			p.logger = logger
+		}
+	}
+}
+
+func WithDebugStreamLogs(enabled bool) Option {
+	return func(p *Provider) {
+		p.debugStreamLogs = enabled
+	}
 }
 
 // NewProvider creates a new lorem ipsum provider.
-func NewProvider() *Provider {
-	return &Provider{
+func NewProvider(opts ...Option) *Provider {
+	p := &Provider{
 		generator: loremgen.New(),
+		logger:    slog.Default(),
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(p)
+		}
+	}
+	return p
 }
 
 // Name returns the provider identifier.
@@ -193,20 +218,33 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 		stopReason := "end_turn"
 		toolIndex := 0 // Rotate through requested tools
 
-		log.Printf("[LOREM] StreamResponse started: model=%s, thinking_enabled=%v, tools_enabled=%v, max_tokens=%d",
-			req.Model, thinkingEnabled, toolsEnabled, maxTokens)
+		if p.debugStreamLogs {
+			p.logger.Debug("lorem stream started",
+				"model", req.Model,
+				"thinking_enabled", thinkingEnabled,
+				"tools_enabled", toolsEnabled,
+				"max_tokens", maxTokens,
+			)
+		}
 
 		// Rotation pattern: text → [thinking] → [tool_use if enabled] → repeat
 		// Each text/thinking block: 20 words
 		// Tool blocks: ~20 tokens for JSON
 		for totalOutputTokens < maxTokens {
-			log.Printf("[LOREM] Loop iteration: blockIndex=%d, totalOutputTokens=%d, remainingTokens=%d",
-				blockIndex, totalOutputTokens, maxTokens-totalOutputTokens)
+			if p.debugStreamLogs {
+				p.logger.Debug("lorem loop iteration",
+					"block_index", blockIndex,
+					"total_output_tokens", totalOutputTokens,
+					"remaining_tokens", maxTokens-totalOutputTokens,
+				)
+			}
 			remainingTokens := maxTokens - totalOutputTokens
 
 			// Block 0, 3, 6, 9... : Text block (20 words)
 			if blockIndex%3 == 0 || (blockIndex%3 == 1 && !thinkingEnabled) {
-				log.Printf("[LOREM] Executing TEXT block: blockIndex=%d", blockIndex)
+				if p.debugStreamLogs {
+					p.logger.Debug("lorem executing text block", "block_index", blockIndex)
+				}
 				targetWords := 20
 				if remainingTokens < targetWords {
 					targetWords = remainingTokens
@@ -219,8 +257,13 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 				}
 				totalOutputTokens += outputTokens
 				blockIndex++
-				log.Printf("[LOREM] TEXT block complete: outputTokens=%d, newTotal=%d, cutoff=%v",
-					outputTokens, totalOutputTokens, cutoff)
+				if p.debugStreamLogs {
+					p.logger.Debug("lorem text block complete",
+						"output_tokens", outputTokens,
+						"new_total", totalOutputTokens,
+						"cutoff", cutoff,
+					)
+				}
 
 				if cutoff {
 					stopReason = "max_tokens"
@@ -228,7 +271,9 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 				}
 			} else if blockIndex%3 == 1 && thinkingEnabled {
 				// Block 1, 4, 7... : Thinking block (20 words, only if enabled)
-				log.Printf("[LOREM] Executing THINKING block: blockIndex=%d", blockIndex)
+				if p.debugStreamLogs {
+					p.logger.Debug("lorem executing thinking block", "block_index", blockIndex)
+				}
 				targetWords := 20
 				if remainingTokens < targetWords {
 					targetWords = remainingTokens
@@ -241,8 +286,13 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 				}
 				totalOutputTokens += outputTokens
 				blockIndex++
-				log.Printf("[LOREM] THINKING block complete: outputTokens=%d, newTotal=%d, cutoff=%v",
-					outputTokens, totalOutputTokens, cutoff)
+				if p.debugStreamLogs {
+					p.logger.Debug("lorem thinking block complete",
+						"output_tokens", outputTokens,
+						"new_total", totalOutputTokens,
+						"cutoff", cutoff,
+					)
+				}
 
 				if cutoff {
 					stopReason = "max_tokens"
@@ -250,9 +300,13 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 				}
 			} else if toolsEnabled {
 				// Block 2, 5, 8... : Tool use block (~20 tokens for JSON)
-				log.Printf("[LOREM] Executing TOOL_USE block: blockIndex=%d, toolIndex=%d", blockIndex, toolIndex)
+				if p.debugStreamLogs {
+					p.logger.Debug("lorem executing tool_use block", "block_index", blockIndex, "tool_index", toolIndex)
+				}
 				if remainingTokens < 20 {
-					log.Printf("[LOREM] Skipping TOOL_USE: insufficient tokens (need 20, have %d)", remainingTokens)
+					if p.debugStreamLogs {
+						p.logger.Debug("lorem skipping tool_use: insufficient tokens", "remaining_tokens", remainingTokens)
+					}
 					// Not enough budget for tool block
 					break
 				}
@@ -267,8 +321,12 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 				totalOutputTokens += outputTokens
 				blockIndex++
 				toolIndex++
-				log.Printf("[LOREM] TOOL_USE block complete: outputTokens=%d, newTotal=%d",
-					outputTokens, totalOutputTokens)
+				if p.debugStreamLogs {
+					p.logger.Debug("lorem tool_use block complete",
+						"output_tokens", outputTokens,
+						"new_total", totalOutputTokens,
+					)
+				}
 			} else {
 				// No tools enabled, skip tool block
 				blockIndex++
@@ -276,13 +334,20 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 
 			// Safety check: prevent infinite loop
 			if blockIndex > 100 {
-				log.Printf("[LOREM] Loop exit: safety check (blockIndex > 100)")
+				if p.debugStreamLogs {
+					p.logger.Debug("lorem loop exit: safety check (block_index > 100)", "block_index", blockIndex)
+				}
 				break
 			}
 		}
 
-		log.Printf("[LOREM] Loop exited: totalOutputTokens=%d, maxTokens=%d, blockIndex=%d",
-			totalOutputTokens, maxTokens, blockIndex)
+		if p.debugStreamLogs {
+			p.logger.Debug("lorem loop exited",
+				"total_output_tokens", totalOutputTokens,
+				"max_tokens", maxTokens,
+				"block_index", blockIndex,
+			)
+		}
 
 		// Note: stopReason is already set correctly:
 		// - "max_tokens" is set inside the loop when cutoff=true (cutoff models only)
@@ -381,6 +446,7 @@ func (p *Provider) streamToolUseBlock(ctx context.Context, eventChan chan<- llmp
 	// Serialize tool input to JSON
 	jsonBytes, err := json.MarshalIndent(tool.input, "", "  ")
 	if err != nil {
+		p.logger.Error("failed to marshal tool input", "error", err)
 		return 0, fmt.Errorf("failed to marshal tool input: %w", err)
 	}
 	jsonStr := string(jsonBytes)
@@ -566,6 +632,7 @@ func (p *Provider) streamToolUseBlockFromBuiltIn(ctx context.Context, eventChan 
 	// Serialize tool input to JSON
 	jsonBytes, err := json.MarshalIndent(input, "", "  ")
 	if err != nil {
+		p.logger.Error("failed to marshal tool input", "error", err)
 		return 0, fmt.Errorf("failed to marshal tool input: %w", err)
 	}
 	jsonStr := string(jsonBytes)

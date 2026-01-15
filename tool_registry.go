@@ -63,10 +63,12 @@ func (r *ToolRegistry) registerBuiltInTools() {
 // Register adds a tool definition to the registry
 func (r *ToolRegistry) Register(def ToolDefinition) error {
 	if def.Name == "" {
+		globalLogger.Error("tool name is required")
 		return fmt.Errorf("tool name is required")
 	}
 
 	if def.Factory == nil {
+		globalLogger.Error("factory function is required", "tool_name", def.Name)
 		return fmt.Errorf("factory function is required for tool %s", def.Name)
 	}
 
@@ -74,6 +76,7 @@ func (r *ToolRegistry) Register(def ToolDefinition) error {
 	defer r.mu.Unlock()
 
 	if _, exists := r.tools[def.Name]; exists {
+		globalLogger.Warn("tool is already registered", "tool_name", def.Name)
 		return fmt.Errorf("tool %s is already registered", def.Name)
 	}
 
@@ -88,6 +91,7 @@ func (r *ToolRegistry) Unregister(name string) error {
 	defer r.mu.Unlock()
 
 	if _, exists := r.tools[name]; !exists {
+		globalLogger.Warn("tool is not registered", "tool_name", name)
 		return fmt.Errorf("tool %s is not registered", name)
 	}
 
@@ -102,6 +106,7 @@ func (r *ToolRegistry) Get(name string) (ToolDefinition, error) {
 
 	def, exists := r.tools[name]
 	if !exists {
+		globalLogger.Error("unknown tool", "tool_name", name)
 		return ToolDefinition{}, fmt.Errorf("unknown tool: %s", name)
 	}
 

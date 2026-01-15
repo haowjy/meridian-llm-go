@@ -20,11 +20,12 @@ func sanitizeToolUseID(id string) string {
 }
 
 // convertToAnthropicMessages converts library messages to Anthropic SDK format.
-func convertToAnthropicMessages(messages []llmprovider.Message) ([]anthropic.MessageParam, error) {
+func (p *Provider) convertToAnthropicMessages(messages []llmprovider.Message) ([]anthropic.MessageParam, error) {
 	// Phase 1: Handle cross-provider server tools by splitting messages
 	// This converts server tools from other providers into synthetic conversation turns
 	processedMessages, err := llmprovider.SplitMessagesAtCrossProviderTool(messages, llmprovider.ProviderAnthropic)
 	if err != nil {
+		p.logger.Error("failed to process cross-provider tools", "error", err)
 		return nil, fmt.Errorf("failed to process cross-provider tools: %w", err)
 	}
 
@@ -49,9 +50,11 @@ func convertToAnthropicMessages(messages []llmprovider.Message) ([]anthropic.Mes
 			// Same-provider optimization: Replay original Anthropic blocks from ProviderData
 			// This preserves provider-specific data (encrypted_content, etc.) for perfect replay
 			if block.IsFromProvider(llmprovider.ProviderAnthropic) && block.HasProviderData() {
-				if originalBlock, err := replayAnthropicBlock(block); err == nil {
+				if originalBlock, err := p.replayAnthropicBlock(block); err == nil {
 					blocks = append(blocks, originalBlock)
 					continue
+				} else {
+					p.logger.Warn("failed to replay anthropic block, falling back to normalized conversion", "block_type", block.BlockType, "provider", block.Provider, "error", err)
 				}
 				// Fall through to normalized conversion if replay fails
 			}
@@ -62,6 +65,7 @@ func convertToAnthropicMessages(messages []llmprovider.Message) ([]anthropic.Mes
 				*block.ExecutionSide == llmprovider.ExecutionSideProvider &&
 				block.IsFromDifferentProvider(llmprovider.ProviderAnthropic) {
 				// Cross-provider provider-side tools should have been handled by SplitMessagesAtCrossProviderTool
+				p.logger.Error("unexpected cross-provider provider-side tool", "message_index", i, "block_index", j)
 				return nil, fmt.Errorf("message %d, block %d: unexpected cross-provider provider-side tool (should have been split)", i, j)
 			}
 
@@ -69,6 +73,7 @@ func convertToAnthropicMessages(messages []llmprovider.Message) ([]anthropic.Mes
 			case llmprovider.BlockTypeText:
 				// Text block: use TextContent field
 				if block.TextContent == nil {
+					p.logger.Error("text block missing text_content", "message_index", i, "block_index", j)
 					return nil, fmt.Errorf("message %d, block %d: text block missing text_content", i, j)
 				}
 				blocks = append(blocks, anthropic.NewTextBlock(*block.TextContent))
@@ -76,11 +81,13 @@ func convertToAnthropicMessages(messages []llmprovider.Message) ([]anthropic.Mes
 			case llmprovider.BlockTypeToolUse:
 				// Tool use block: extract tool_use_id, tool_name, and input
 				if block.Content == nil {
+					p.logger.Error("tool_use block missing content", "message_index", i, "block_index", j)
 					return nil, fmt.Errorf("message %d, block %d: tool_use block missing content", i, j)
 				}
 
 				toolUseID, ok := block.Content["tool_use_id"].(string)
 				if !ok || toolUseID == "" {
+					p.logger.Error("tool_use block missing tool_use_id", "message_index", i, "block_index", j)
 					return nil, fmt.Errorf("message %d, block %d: tool_use block missing tool_use_id", i, j)
 				}
 
@@ -91,11 +98,13 @@ func convertToAnthropicMessages(messages []llmprovider.Message) ([]anthropic.Mes
 
 				toolName, ok := block.Content["tool_name"].(string)
 				if !ok || toolName == "" {
+					p.logger.Error("tool_use block missing tool_name", "message_index", i, "block_index", j)
 					return nil, fmt.Errorf("message %d, block %d: tool_use block missing tool_name", i, j)
 				}
 
 				input, ok := block.Content["input"]
 				if !ok {
+					p.logger.Error("tool_use block missing input", "message_index", i, "block_index", j)
 					return nil, fmt.Errorf("message %d, block %d: tool_use block missing input", i, j)
 				}
 
@@ -105,11 +114,13 @@ func convertToAnthropicMessages(messages []llmprovider.Message) ([]anthropic.Mes
 			case llmprovider.BlockTypeToolResult:
 				// Tool result block: extract tool_use_id and content
 				if block.Content == nil {
+					p.logger.Error("tool_result block missing content", "message_index", i, "block_index", j)
 					return nil, fmt.Errorf("message %d, block %d: tool_result block missing content", i, j)
 				}
 
 				toolUseID, ok := block.Content["tool_use_id"].(string)
 				if !ok || toolUseID == "" {
+					p.logger.Error("tool_result block missing tool_use_id", "message_index", i, "block_index", j)
 					return nil, fmt.Errorf("message %d, block %d: tool_result block missing tool_use_id", i, j)
 				}
 
@@ -151,6 +162,7 @@ func convertToAnthropicMessages(messages []llmprovider.Message) ([]anthropic.Mes
 			case llmprovider.BlockTypeThinking:
 				// Thinking block: extract thinking text and signature
 				if block.TextContent == nil {
+					p.logger.Error("thinking block missing text_content", "message_index", i, "block_index", j)
 					return nil, fmt.Errorf("message %d, block %d: thinking block missing text_content", i, j)
 				}
 
@@ -186,18 +198,17 @@ func convertToAnthropicMessages(messages []llmprovider.Message) ([]anthropic.Mes
 				if block.IsFromProvider(llmprovider.ProviderAnthropic) && block.HasProviderData() {
 					// Replay original Anthropic block from ProviderData
 					// This preserves provider-specific fields like EncryptedContent
-					originalBlock, err := replayAnthropicBlock(block)
+					originalBlock, err := p.replayAnthropicBlock(block)
 					if err == nil {
 						blocks = append(blocks, originalBlock)
 						continue
 					}
-					// If replay fails, fall through to error
-					return nil, fmt.Errorf("message %d, block %d: failed to replay web_search block: %w", i, j, err)
+					p.logger.Warn("failed to replay web_search block, falling back", "block_type", block.BlockType, "provider", block.Provider, "error", err)
+					// If replay fails, fall through to cross-provider handling
 				}
 
 				// Cross-provider web_search replay not yet implemented
 				// Design: Convert to synthetic tool_use + tool_result (see design doc)
-				return nil, fmt.Errorf("message %d, block %d: cross-provider web_search replay not yet supported", i, j)
 
 			default:
 				// Skip unsupported block types (image, document, etc.)
@@ -213,6 +224,7 @@ func convertToAnthropicMessages(messages []llmprovider.Message) ([]anthropic.Mes
 		case "assistant":
 			message = anthropic.NewAssistantMessage(blocks...)
 		default:
+			p.logger.Error("unsupported message role", "message_index", i, "role", msg.Role)
 			return nil, fmt.Errorf("message %d: unsupported role '%s'", i, msg.Role)
 		}
 
@@ -327,8 +339,9 @@ func mergeConsecutiveSameRoleMessages(messages []llmprovider.Message) []llmprovi
 // replayAnthropicBlock attempts to deserialize ProviderData and reconstruct the exact
 // Anthropic SDK block for same-provider replay. This preserves provider-specific data
 // like encrypted_content that would be lost in normalization.
-func replayAnthropicBlock(block *llmprovider.Block) (anthropic.ContentBlockParamUnion, error) {
+func (p *Provider) replayAnthropicBlock(block *llmprovider.Block) (anthropic.ContentBlockParamUnion, error) {
 	if !block.HasProviderData() {
+		p.logger.Debug("block has no provider data for replay")
 		return anthropic.ContentBlockParamUnion{}, fmt.Errorf("block has no provider data")
 	}
 
@@ -337,6 +350,7 @@ func replayAnthropicBlock(block *llmprovider.Block) (anthropic.ContentBlockParam
 		Type string `json:"type"`
 	}
 	if err := json.Unmarshal(block.ProviderData, &rawBlock); err != nil {
+		p.logger.Error("failed to unmarshal provider data", "error", err)
 		return anthropic.ContentBlockParamUnion{}, fmt.Errorf("failed to unmarshal provider data: %w", err)
 	}
 
@@ -349,6 +363,7 @@ func replayAnthropicBlock(block *llmprovider.Block) (anthropic.ContentBlockParam
 			Input map[string]interface{} `json:"input"`
 		}
 		if err := json.Unmarshal(block.ProviderData, &serverToolUse); err != nil {
+			p.logger.Error("failed to unmarshal server_tool_use", "error", err)
 			return anthropic.ContentBlockParamUnion{}, fmt.Errorf("failed to unmarshal server_tool_use: %w", err)
 		}
 		// Use SDK constructor to rebuild block
@@ -404,11 +419,13 @@ func replayAnthropicBlock(block *llmprovider.Block) (anthropic.ContentBlockParam
 			Content   json.RawMessage `json:"content"`
 		}
 		if err := json.Unmarshal(block.ProviderData, &legacy); err != nil {
+			p.logger.Error("failed to unmarshal web_search_tool_result", "error", err)
 			return anthropic.ContentBlockParamUnion{}, fmt.Errorf("failed to unmarshal web_search_tool_result: %w", err)
 		}
 
 		var contentUnion anthropic.WebSearchToolResultBlockContentUnion
 		if err := json.Unmarshal(legacy.Content, &contentUnion); err != nil {
+			p.logger.Error("failed to unmarshal web_search content", "error", err)
 			return anthropic.ContentBlockParamUnion{}, fmt.Errorf("failed to unmarshal web_search content: %w", err)
 		}
 
@@ -433,11 +450,13 @@ func replayAnthropicBlock(block *llmprovider.Block) (anthropic.ContentBlockParam
 			return anthropic.NewWebSearchToolResultBlock(searchError, legacy.ToolUseID), nil
 		}
 
+		p.logger.Error("web_search_tool_result has no results and no error")
 		return anthropic.ContentBlockParamUnion{}, fmt.Errorf("web_search_tool_result has no results and no error")
 
 	default:
 		// Other block types not yet supported for raw replay
 		// Fall back to normalized conversion
+		p.logger.Debug("raw replay not implemented for block type", "type", rawBlock.Type)
 		return anthropic.ContentBlockParamUnion{}, fmt.Errorf("raw replay not implemented for type: %s", rawBlock.Type)
 	}
 }
@@ -553,6 +572,7 @@ func (p *Provider) convertAnthropicBlock(content anthropic.ContentBlockUnion, se
 		}
 		providerData, err := json.Marshal(providerDataMap)
 		if err != nil {
+			p.logger.Error("failed to marshal thinking signature", "error", err)
 			return nil, fmt.Errorf("marshal thinking signature: %w", err)
 		}
 
@@ -612,6 +632,7 @@ func (p *Provider) convertAnthropicBlock(content anthropic.ContentBlockUnion, se
 			}
 			rawData, err := json.Marshal(providerDataMap)
 			if err != nil {
+				p.logger.Error("failed to marshal server_tool_use provider data", "error", err)
 				return nil, fmt.Errorf("marshal server_tool_use provider data: %w", err)
 			}
 
@@ -722,6 +743,7 @@ func (p *Provider) convertAnthropicBlock(content anthropic.ContentBlockUnion, se
 
 			rawData, err := json.Marshal(providerDataMap)
 			if err != nil {
+				p.logger.Error("failed to marshal web_search_tool_result provider data", "error", err)
 				return nil, fmt.Errorf("marshal web_search_tool_result provider data: %w", err)
 			}
 

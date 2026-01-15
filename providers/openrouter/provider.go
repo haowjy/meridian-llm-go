@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -27,22 +28,47 @@ import (
 // - 404 errors: Verify model name at https://openrouter.ai/models
 // - Tool calling: Not all models support function calling - check OpenRouter docs
 type Provider struct {
-	apiKey     string
-	httpClient *http.Client
-	baseURL    string
+	apiKey          string
+	httpClient      *http.Client
+	baseURL         string
+	logger          *slog.Logger
+	debugStreamLogs bool
+}
+
+type Option func(*Provider)
+
+func WithLogger(logger *slog.Logger) Option {
+	return func(p *Provider) {
+		if logger != nil {
+			p.logger = logger
+		}
+	}
+}
+
+func WithDebugStreamLogs(enabled bool) Option {
+	return func(p *Provider) {
+		p.debugStreamLogs = enabled
+	}
 }
 
 // NewProvider creates a new OpenRouter provider with the given API key.
-func NewProvider(apiKey string) (*Provider, error) {
+func NewProvider(apiKey string, opts ...Option) (*Provider, error) {
 	if apiKey == "" {
 		return nil, llmprovider.ErrInvalidAPIKey
 	}
 
-	return &Provider{
+	p := &Provider{
 		apiKey:     apiKey,
 		httpClient: &http.Client{Timeout: 120 * time.Second},
 		baseURL:    "https://openrouter.ai/api/v1",
-	}, nil
+		logger:     slog.Default(),
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(p)
+		}
+	}
+	return p, nil
 }
 
 // Name returns the provider identifier.
@@ -104,7 +130,7 @@ func (p *Provider) GenerateResponse(ctx context.Context, req *llmprovider.Genera
 	}
 
 	// Build OpenRouter API request (shared logic)
-	openrouterReq, err := buildChatCompletionRequest(req)
+	openrouterReq, err := p.buildChatCompletionRequest(req)
 	if err != nil {
 		return nil, err
 	}
@@ -120,6 +146,7 @@ func (p *Provider) GenerateResponse(ctx context.Context, req *llmprovider.Genera
 
 	resp, err := p.httpClient.Do(httpReq)
 	if err != nil {
+		p.logger.Error("openrouter HTTP request failed", "model", req.Model, "error", err)
 		return nil, fmt.Errorf("openrouter HTTP request failed: %w", err)
 	}
 	defer resp.Body.Close()
@@ -132,18 +159,21 @@ func (p *Provider) GenerateResponse(ctx context.Context, req *llmprovider.Genera
 	// Read response body
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		p.logger.Error("failed to read response body", "model", req.Model, "error", err)
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
 	// Parse response
 	var chatResp ChatCompletionResponse
 	if err := json.Unmarshal(body, &chatResp); err != nil {
+		p.logger.Error("failed to parse response", "model", req.Model, "error", err)
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
 
 	// Convert to library format
-	response, err := convertFromChatCompletionResponse(&chatResp)
+	response, err := p.convertFromChatCompletionResponse(&chatResp)
 	if err != nil {
+		p.logger.Error("failed to convert response", "model", req.Model, "error", err)
 		return nil, fmt.Errorf("failed to convert response: %w", err)
 	}
 
@@ -154,6 +184,7 @@ func (p *Provider) GenerateResponse(ctx context.Context, req *llmprovider.Genera
 func (p *Provider) buildHTTPRequest(ctx context.Context, req *ChatCompletionRequest) (*http.Request, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
+		p.logger.Error("failed to marshal request", "model", req.Model, "error", err)
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
@@ -184,6 +215,7 @@ func (p *Provider) handleErrorResponse(resp *http.Response, model string) error 
 
 	if err := json.Unmarshal(body, &errResp); err != nil || errResp.Error.Message == "" {
 		// Fallback to plain text error
+		p.logger.Error("openrouter error", "model", model, "status_code", resp.StatusCode, "error", string(body))
 		return fmt.Errorf("openrouter error (HTTP %d): %s", resp.StatusCode, string(body))
 	}
 
@@ -231,6 +263,7 @@ func (p *Provider) handleErrorResponse(resp *http.Response, model string) error 
 		if rawBody != "" && rawBody != message {
 			message = fmt.Sprintf("%s [raw: %s]", message, rawBody)
 		}
+		p.logger.Error("bad request", "model", model, "status_code", resp.StatusCode, "message", message)
 		return &llmprovider.ProviderError{
 			Code:       llmprovider.ErrorCodeInvalidRequest,
 			Provider:   p.Name().String(),

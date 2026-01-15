@@ -2,13 +2,34 @@ package anthropic
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 
 	"github.com/haowjy/meridian-llm-go"
 )
+
+// streamDebug wraps debug logging for streaming operations.
+// Only logs when enabled via WithDebugStreamLogs(true).
+type streamDebug struct {
+	enabled bool
+	logger  *slog.Logger
+}
+
+func (d streamDebug) Debug(msg string, args ...any) {
+	if d.enabled && d.logger != nil {
+		d.logger.Debug(msg, args...)
+	}
+}
+
+func (d streamDebug) Warn(msg string, args ...any) {
+	if d.enabled && d.logger != nil {
+		d.logger.Warn(msg, args...)
+	}
+}
 
 // DefaultStreamingIdleTimeout is the default timeout for SDK streaming.
 // If no event is received for this duration, the stream is considered stalled.
@@ -34,7 +55,7 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 	}
 
 	// Build Anthropic API parameters (shared logic with GenerateResponse)
-	apiParams, err := buildMessageParams(req)
+	apiParams, err := p.buildMessageParams(req)
 	if err != nil {
 		return nil, err
 	}
@@ -45,6 +66,9 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 	// Start streaming goroutine with idle timeout detection
 	go func() {
 		defer close(eventChan)
+
+		// Create debug logger instance
+		dbg := streamDebug{enabled: p.debugStreamLogs, logger: p.logger}
 
 		// Call Anthropic streaming API
 		stream := p.client.Messages.NewStreaming(ctx, apiParams)
@@ -98,6 +122,7 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 
 			case <-idleTimer.C:
 				// No data received for too long - provider stalled
+				p.logger.Warn("streaming idle timeout exceeded", "timeout", DefaultStreamingIdleTimeout)
 				eventChan <- llmprovider.StreamEvent{
 					Error: &llmprovider.ProviderError{
 						Code:      llmprovider.ErrorCodeStreamingIdleTimeout,
@@ -110,6 +135,7 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 				return
 
 			case err := <-sdkErrChan:
+				p.logger.Error("anthropic streaming error", "error", err)
 				eventChan <- llmprovider.StreamEvent{
 					Error: fmt.Errorf("anthropic streaming error: %w", err),
 				}
@@ -126,6 +152,7 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 
 				// Accumulate event into final message
 				if err := message.Accumulate(evt.event); err != nil {
+					p.logger.Error("failed to accumulate message", "error", err)
 					eventChan <- llmprovider.StreamEvent{
 						Error: fmt.Errorf("failed to accumulate message: %w", err),
 					}
@@ -134,7 +161,7 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 
 				// Transform Anthropic event to library StreamEvent
 				// Pass accumulated message so we can emit complete blocks on ContentBlockStop
-				streamEvent := p.transformAnthropicStreamEvent(evt.event, &message, tools)
+				streamEvent := p.transformAnthropicStreamEvent(evt.event, &message, tools, dbg)
 
 				// Send to channel if not empty
 				if streamEvent.Delta != nil || streamEvent.Block != nil || streamEvent.Error != nil {
@@ -145,6 +172,11 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 
 	sendMetadata:
 		// Send final message metadata
+		dbg.Debug("stream complete, sending metadata",
+			"input_tokens", message.Usage.InputTokens,
+			"output_tokens", message.Usage.OutputTokens,
+			"stop_reason", message.StopReason,
+		)
 		metadata := &llmprovider.StreamMetadata{
 			Model:        string(message.Model),
 			InputTokens:  int(message.Usage.InputTokens),
@@ -181,6 +213,8 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 // The tools parameter contains the original tool definitions from the request, used to preserve
 // ExecutionSide when converting tool_use blocks.
 //
+// The dbg parameter provides debug logging (metadata-only, no sensitive content).
+//
 // Anthropic stream events include:
 // - MessageStart: Contains message metadata (id, model, role)
 // - ContentBlockStart: New content block started (index, type)
@@ -188,7 +222,7 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 // - ContentBlockStop: Current block finished → we emit complete block here
 // - MessageDelta: Message-level delta (stop_reason, stop_sequence)
 // - MessageStop: Streaming complete
-func (p *Provider) transformAnthropicStreamEvent(event anthropic.MessageStreamEventUnion, message *anthropic.Message, tools []llmprovider.Tool) llmprovider.StreamEvent {
+func (p *Provider) transformAnthropicStreamEvent(event anthropic.MessageStreamEventUnion, message *anthropic.Message, tools []llmprovider.Tool, dbg streamDebug) llmprovider.StreamEvent {
 	switch e := event.AsAny().(type) {
 	case anthropic.MessageStartEvent:
 		// MessageStart event - not needed for deltas, metadata comes at the end
@@ -198,6 +232,10 @@ func (p *Provider) transformAnthropicStreamEvent(event anthropic.MessageStreamEv
 		// ContentBlockStart - emit block start delta with BlockType set.
 		// For provider-specific types, we normalize BlockType to library block types
 		// so downstream consumers see consistent values (e.g., "web_search_use", "web_search_result").
+		dbg.Debug("content_block_start",
+			"index", e.Index,
+			"type", e.ContentBlock.Type,
+		)
 		var blockType string
 		switch e.ContentBlock.Type {
 		case "text":
@@ -246,6 +284,11 @@ func (p *Provider) transformAnthropicStreamEvent(event anthropic.MessageStreamEv
 				toolName := e.ContentBlock.Name
 				delta.ToolCallName = &toolName
 				delta.ToolName = &toolName // Legacy field
+				dbg.Debug("tool_call_start",
+					"index", e.Index,
+					"id", e.ContentBlock.ID,
+					"name", e.ContentBlock.Name,
+				)
 			}
 
 		case "server_tool_use":
@@ -261,6 +304,11 @@ func (p *Provider) transformAnthropicStreamEvent(event anthropic.MessageStreamEv
 			toolName := e.ContentBlock.Name
 			delta.ToolCallName = &toolName
 			delta.ToolName = &toolName // Legacy field
+			dbg.Debug("server_tool_use_start",
+				"index", e.Index,
+				"id", e.ContentBlock.ID,
+				"name", e.ContentBlock.Name,
+			)
 		}
 		// Note: Input is complete but we don't send it in the delta
 		// The complete block (with ProviderData) will be emitted on ContentBlockStop
@@ -274,6 +322,10 @@ func (p *Provider) transformAnthropicStreamEvent(event anthropic.MessageStreamEv
 			toolID := e.ContentBlock.ToolUseID
 			delta.ToolCallID = &toolID
 			delta.ToolUseID = &toolID // Legacy field
+			dbg.Debug("web_search_result_start",
+				"index", e.Index,
+				"tool_use_id", e.ContentBlock.ToolUseID,
+			)
 		}
 		}
 
@@ -291,21 +343,37 @@ func (p *Provider) transformAnthropicStreamEvent(event anthropic.MessageStreamEv
 			delta.DeltaType = llmprovider.DeltaTypeText
 			text := e.Delta.Text
 			delta.TextDelta = &text
+			dbg.Debug("text_delta",
+				"index", e.Index,
+				"chunk_len", len(text),
+			)
 
 		case "thinking_delta":
 			delta.DeltaType = llmprovider.DeltaTypeThinking
 			text := e.Delta.Thinking
 			delta.TextDelta = &text
+			dbg.Debug("thinking_delta",
+				"index", e.Index,
+				"chunk_len", len(text),
+			)
 
 		case "signature_delta":
 			delta.DeltaType = llmprovider.DeltaTypeSignature
 			sig := e.Delta.Signature
 			delta.SignatureDelta = &sig
+			dbg.Debug("signature_delta",
+				"index", e.Index,
+				"chunk_len", len(sig),
+			)
 
 		case "input_json_delta":
 			delta.DeltaType = llmprovider.DeltaTypeJSON
 			jsonDelta := e.Delta.PartialJSON
 			delta.JSONDelta = &jsonDelta
+			dbg.Debug("input_json_delta",
+				"index", e.Index,
+				"chunk_len", len(jsonDelta),
+			)
 		}
 
 		return llmprovider.StreamEvent{Delta: delta}
@@ -315,8 +383,13 @@ func (p *Provider) transformAnthropicStreamEvent(event anthropic.MessageStreamEv
 		// The SDK has accumulated the complete block in message.Content[index]
 		blockIndex := int(e.Index)
 
+		dbg.Debug("content_block_stop",
+			"index", e.Index,
+		)
+
 		// Validate block index
 		if blockIndex < 0 || blockIndex >= len(message.Content) {
+			p.logger.Error("invalid block index in stream", "block_index", blockIndex, "message_blocks", len(message.Content))
 			return llmprovider.StreamEvent{
 				Error: fmt.Errorf("invalid block index %d, message has %d blocks", blockIndex, len(message.Content)),
 			}
@@ -327,10 +400,28 @@ func (p *Provider) transformAnthropicStreamEvent(event anthropic.MessageStreamEv
 		// web_search_tool_result → web_search_result)
 		block, err := p.convertAnthropicBlock(message.Content[blockIndex], blockIndex, tools)
 		if err != nil {
+			p.logger.Error("failed to convert block in stream", "block_index", blockIndex, "error", err)
 			return llmprovider.StreamEvent{
 				Error: fmt.Errorf("convert block %d: %w", blockIndex, err),
 			}
 		}
+
+		// Log finalized block metadata (type, ID, name, args length for tool_use)
+		logArgs := []any{"index", blockIndex, "block_type", block.BlockType}
+		if block.BlockType == llmprovider.BlockTypeToolUse {
+			if id, ok := block.Content["id"].(string); ok {
+				logArgs = append(logArgs, "id", id)
+			}
+			if name, ok := block.Content["tool_name"].(string); ok {
+				logArgs = append(logArgs, "name", name)
+			}
+			if input, ok := block.Content["input"]; ok {
+				// Log length of input (not the content itself)
+				inputJSON, _ := json.Marshal(input)
+				logArgs = append(logArgs, "args_len", len(inputJSON))
+			}
+		}
+		dbg.Debug("block_finalized", logArgs...)
 
 		return llmprovider.StreamEvent{Block: block}
 

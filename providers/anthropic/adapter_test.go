@@ -1,10 +1,18 @@
 package anthropic
 
 import (
+	"log/slog"
 	"testing"
 
 	"github.com/haowjy/meridian-llm-go"
 )
+
+// testProvider creates a minimal provider instance for testing internal methods
+func testProvider() *Provider {
+	return &Provider{
+		logger: slog.Default(), // Tests use default logger
+	}
+}
 
 func TestConvertToAnthropicMessages_Text(t *testing.T) {
 	text := "Hello, world!"
@@ -21,7 +29,7 @@ func TestConvertToAnthropicMessages_Text(t *testing.T) {
 		},
 	}
 
-	result, err := convertToAnthropicMessages(messages)
+	result, err := testProvider().convertToAnthropicMessages(messages)
 	if err != nil {
 		t.Fatalf("convertToAnthropicMessages() error = %v", err)
 	}
@@ -52,7 +60,7 @@ func TestConvertToAnthropicMessages_ToolUse(t *testing.T) {
 		},
 	}
 
-	result, err := convertToAnthropicMessages(messages)
+	result, err := testProvider().convertToAnthropicMessages(messages)
 	if err != nil {
 		t.Fatalf("convertToAnthropicMessages() error = %v", err)
 	}
@@ -81,7 +89,7 @@ func TestConvertToAnthropicMessages_ToolResult(t *testing.T) {
 		},
 	}
 
-	result, err := convertToAnthropicMessages(messages)
+	result, err := testProvider().convertToAnthropicMessages(messages)
 	if err != nil {
 		t.Fatalf("convertToAnthropicMessages() error = %v", err)
 	}
@@ -108,7 +116,7 @@ func TestConvertToAnthropicMessages_ToolUse_MissingID(t *testing.T) {
 		},
 	}
 
-	_, err := convertToAnthropicMessages(messages)
+	_, err := testProvider().convertToAnthropicMessages(messages)
 	if err == nil {
 		t.Error("expected error for missing tool_use_id, got nil")
 	}
@@ -132,7 +140,7 @@ func TestConvertToAnthropicMessages_ToolResult_MissingID(t *testing.T) {
 		},
 	}
 
-	_, err := convertToAnthropicMessages(messages)
+	_, err := testProvider().convertToAnthropicMessages(messages)
 	if err == nil {
 		t.Error("expected error for missing tool_use_id, got nil")
 	}
@@ -190,7 +198,7 @@ func TestConvertToAnthropicMessages_CrossProviderServerTool(t *testing.T) {
 		},
 	}
 
-	result, err := convertToAnthropicMessages(messages)
+	result, err := testProvider().convertToAnthropicMessages(messages)
 	if err != nil {
 		t.Fatalf("convertToAnthropicMessages() error = %v", err)
 	}
@@ -245,7 +253,7 @@ func TestConvertToAnthropicMessages_SameProviderServerTool(t *testing.T) {
 		},
 	}
 
-	result, err := convertToAnthropicMessages(messages)
+	result, err := testProvider().convertToAnthropicMessages(messages)
 	if err != nil {
 		t.Fatalf("convertToAnthropicMessages() error = %v", err)
 	}
@@ -371,7 +379,7 @@ func TestConvertToAnthropicMessages_ThinkingBlock_WithSignature(t *testing.T) {
 		},
 	}
 
-	result, err := convertToAnthropicMessages(messages)
+	result, err := testProvider().convertToAnthropicMessages(messages)
 	if err != nil {
 		t.Fatalf("convertToAnthropicMessages() error = %v", err)
 	}
@@ -407,7 +415,7 @@ func TestConvertToAnthropicMessages_ThinkingBlock_WithoutSignature(t *testing.T)
 		},
 	}
 
-	result, err := convertToAnthropicMessages(messages)
+	result, err := testProvider().convertToAnthropicMessages(messages)
 	if err != nil {
 		t.Fatalf("convertToAnthropicMessages() error = %v", err)
 	}
@@ -957,7 +965,7 @@ func TestConvertToAnthropicMessages_WithMerging_Integration(t *testing.T) {
 		},
 	}
 
-	result, err := convertToAnthropicMessages(messages)
+	result, err := testProvider().convertToAnthropicMessages(messages)
 	if err != nil {
 		t.Fatalf("convertToAnthropicMessages() error = %v", err)
 	}

@@ -14,6 +14,11 @@ type StreamEvent struct {
 	// Metadata contains final response data when streaming completes (nil until end)
 	Metadata *StreamMetadata
 
+	// GenerationIDDiscovered is a non-terminal metadata event emitted when generation ID is discovered
+	// Emitted once per generation (on first chunk), allows early persistence
+	// This is separate from Metadata which is the final event
+	GenerationIDDiscovered *GenerationIDEvent
+
 	// Error contains any error that occurred during streaming (nil if successful)
 	Error error
 }
@@ -40,4 +45,20 @@ type StreamMetadata struct {
 
 	// ResponseMetadata contains provider-specific response data
 	ResponseMetadata map[string]interface{}
+}
+
+// GenerationIDEvent contains generation metadata discovered early in the stream.
+// This is emitted as soon as the provider sends the generation ID (typically first chunk),
+// not at stream completion like StreamMetadata.
+// Allows early persistence for cancel-via-generation enrichment.
+type GenerationIDEvent struct {
+	// GenerationID is the unique identifier for this generation (provider-specific)
+	// OpenRouter: e.g., "gen-abc123xyz"
+	GenerationID string
+
+	// Model is the model identifier (e.g., "x-ai/grok-beta")
+	Model string
+
+	// Provider is the provider name (e.g., "openrouter")
+	Provider string
 }

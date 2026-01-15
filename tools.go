@@ -68,6 +68,7 @@ func (t *Tool) Validate() error {
 	}
 
 	if t.Type != "function" {
+		globalLogger.Error("unsupported tool type", "tool_type", t.Type)
 		return fmt.Errorf("unsupported tool type: %s (only 'function' is supported)", t.Type)
 	}
 
@@ -104,6 +105,7 @@ func (tc *ToolChoice) Validate() error {
 	case ToolChoiceModeAuto, ToolChoiceModeRequired, ToolChoiceModeNone, ToolChoiceModeSpecific:
 		// Valid mode
 	default:
+		globalLogger.Error("invalid tool choice mode", "mode", tc.Mode)
 		return fmt.Errorf("invalid tool choice mode: %s", tc.Mode)
 	}
 
@@ -117,6 +119,7 @@ func NewToolChoice(mode ToolChoiceMode) (*ToolChoice, error) {
 	}
 
 	if err := tc.Validate(); err != nil {
+		globalLogger.Error("invalid tool choice", "error", err)
 		return nil, fmt.Errorf("invalid tool choice: %w", err)
 	}
 
@@ -131,6 +134,7 @@ func NewSpecificToolChoice(toolName string) (*ToolChoice, error) {
 	}
 
 	if err := tc.Validate(); err != nil {
+		globalLogger.Error("invalid specific tool choice", "error", err)
 		return nil, fmt.Errorf("invalid specific tool choice: %w", err)
 	}
 
@@ -155,6 +159,7 @@ func MapToolByName(name string) (*Tool, error) {
 	case "bash", "code_exec":
 		return NewBashTool()
 	default:
+		globalLogger.Error("unknown built-in tool", "tool_name", name)
 		return nil, fmt.Errorf("unknown built-in tool: %s", name)
 	}
 }

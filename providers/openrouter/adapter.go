@@ -335,13 +335,16 @@ func mergeConsecutiveSameRoleMessages(messages []llmprovider.Message) []llmprovi
 
 // replayOpenRouterThinking reconstructs original ReasoningDetails from a thinking block's ProviderData.
 // Returns nil if ProviderData is empty or invalid (caller should fallback to normalized conversion).
+// Note: This function is used internally and errors are handled gracefully by falling back to normalized conversion.
 func replayOpenRouterThinking(block *llmprovider.Block) ([]ReasoningDetail, error) {
 	if !block.HasProviderData() {
+		// Not an error - just means no provider data available (expected for cross-provider blocks)
 		return nil, fmt.Errorf("no provider data")
 	}
 
 	var details []ReasoningDetail
 	if err := json.Unmarshal(block.ProviderData, &details); err != nil {
+		// Not logged - caller handles fallback gracefully
 		return nil, fmt.Errorf("invalid provider data: %w", err)
 	}
 
@@ -377,11 +380,12 @@ func convertThinkingToReasoningDetails(block *llmprovider.Block) []ReasoningDeta
 // ===== End of Thinking Block Replay Helpers =====
 
 // convertToOpenRouterMessages converts library messages to OpenRouter/OpenAI format.
-func convertToOpenRouterMessages(messages []llmprovider.Message) ([]Message, error) {
+func (p *Provider) convertToOpenRouterMessages(messages []llmprovider.Message) ([]Message, error) {
 	// Phase 1: Handle cross-provider server tools by splitting messages
 	// This converts server tools from other providers into synthetic conversation turns
 	processedMessages, err := llmprovider.SplitMessagesAtCrossProviderTool(messages, llmprovider.ProviderOpenRouter)
 	if err != nil {
+		p.logger.Error("failed to process cross-provider tools", "error", err)
 		return nil, fmt.Errorf("failed to process cross-provider tools: %w", err)
 	}
 
@@ -400,7 +404,7 @@ func convertToOpenRouterMessages(messages []llmprovider.Message) ([]Message, err
 	for i, msg := range mergedMessages {
 		// Convert blocks to OpenRouter format
 		// This will convert tool_result blocks to role:"tool" messages
-		openrouterMsg, err := convertMessageToOpenRouter(msg, i)
+		openrouterMsg, err := p.convertMessageToOpenRouter(msg, i)
 		if err != nil {
 			return nil, err
 		}
@@ -414,7 +418,7 @@ func convertToOpenRouterMessages(messages []llmprovider.Message) ([]Message, err
 
 // convertMessageToOpenRouter converts a single library message to OpenRouter format.
 // May return multiple messages (e.g., when splitting tool results).
-func convertMessageToOpenRouter(msg llmprovider.Message, msgIndex int) ([]Message, error) {
+func (p *Provider) convertMessageToOpenRouter(msg llmprovider.Message, msgIndex int) ([]Message, error) {
 	var result []Message
 
 	// Separate blocks by type
@@ -441,6 +445,7 @@ func convertMessageToOpenRouter(msg llmprovider.Message, msgIndex int) ([]Messag
 	for j, block := range toolResultBlocks {
 		toolUseID, ok := block.GetToolUseID()
 		if !ok || toolUseID == "" {
+			p.logger.Error("tool_result block missing tool_use_id", "message_index", msgIndex, "block_index", j)
 			return nil, fmt.Errorf("message %d, block %d: tool_result block missing tool_use_id", msgIndex, j)
 		}
 
@@ -518,7 +523,7 @@ func convertMessageToOpenRouter(msg llmprovider.Message, msgIndex int) ([]Messag
 		if msg.Role == "assistant" && len(toolUseBlocks) > 0 {
 			toolCalls := make([]ToolCall, 0, len(toolUseBlocks))
 			for j, block := range toolUseBlocks {
-				toolCall, err := convertToolUseToToolCall(block, msgIndex, j)
+				toolCall, err := p.convertToolUseToToolCall(block, msgIndex, j)
 				if err != nil {
 					return nil, err
 				}
@@ -537,29 +542,34 @@ func convertMessageToOpenRouter(msg llmprovider.Message, msgIndex int) ([]Messag
 }
 
 // convertToolUseToToolCall converts a tool_use block to OpenRouter ToolCall format.
-func convertToolUseToToolCall(block *llmprovider.Block, msgIndex, blockIndex int) (ToolCall, error) {
+func (p *Provider) convertToolUseToToolCall(block *llmprovider.Block, msgIndex, blockIndex int) (ToolCall, error) {
 	if block.Content == nil {
+		p.logger.Error("tool_use block missing content", "message_index", msgIndex, "block_index", blockIndex)
 		return ToolCall{}, fmt.Errorf("message %d, block %d: tool_use block missing content", msgIndex, blockIndex)
 	}
 
 	toolUseID, ok := block.Content["tool_use_id"].(string)
 	if !ok || toolUseID == "" {
+		p.logger.Error("tool_use block missing tool_use_id", "message_index", msgIndex, "block_index", blockIndex)
 		return ToolCall{}, fmt.Errorf("message %d, block %d: tool_use block missing tool_use_id", msgIndex, blockIndex)
 	}
 
 	toolName, ok := block.Content["tool_name"].(string)
 	if !ok || toolName == "" {
+		p.logger.Error("tool_use block missing tool_name", "message_index", msgIndex, "block_index", blockIndex)
 		return ToolCall{}, fmt.Errorf("message %d, block %d: tool_use block missing tool_name", msgIndex, blockIndex)
 	}
 
 	input, ok := block.Content["input"]
 	if !ok {
+		p.logger.Error("tool_use block missing input", "message_index", msgIndex, "block_index", blockIndex)
 		return ToolCall{}, fmt.Errorf("message %d, block %d: tool_use block missing input", msgIndex, blockIndex)
 	}
 
 	// Marshal input to JSON string
 	inputJSON, err := json.Marshal(input)
 	if err != nil {
+		p.logger.Error("failed to marshal tool input", "message_index", msgIndex, "block_index", blockIndex, "error", err)
 		return ToolCall{}, fmt.Errorf("message %d, block %d: failed to marshal tool input: %w", msgIndex, blockIndex, err)
 	}
 
@@ -574,8 +584,9 @@ func convertToolUseToToolCall(block *llmprovider.Block, msgIndex, blockIndex int
 }
 
 // convertFromChatCompletionResponse converts OpenRouter response to library format.
-func convertFromChatCompletionResponse(resp *ChatCompletionResponse) (*llmprovider.GenerateResponse, error) {
+func (p *Provider) convertFromChatCompletionResponse(resp *ChatCompletionResponse) (*llmprovider.GenerateResponse, error) {
 	if len(resp.Choices) == 0 {
+		p.logger.Error("no choices in response", "response_id", resp.ID)
 		return nil, fmt.Errorf("no choices in response")
 	}
 
@@ -619,7 +630,7 @@ func convertFromChatCompletionResponse(resp *ChatCompletionResponse) (*llmprovid
 	// Convert tool_calls to tool_use blocks
 	providerIDStr := llmprovider.ProviderOpenRouter.String()
 	for _, toolCall := range choice.Message.ToolCalls {
-		block, err := convertToolCallToBlock(toolCall, state.CurrentIndex)
+		block, err := p.convertToolCallToBlock(toolCall, state.CurrentIndex)
 		if err != nil {
 			// Continue on error (don't fail entire response)
 			continue
@@ -651,10 +662,11 @@ func convertFromChatCompletionResponse(resp *ChatCompletionResponse) (*llmprovid
 }
 
 // convertToolCallToBlock converts an OpenRouter ToolCall to a library Block.
-func convertToolCallToBlock(toolCall ToolCall, sequence int) (*llmprovider.Block, error) {
+func (p *Provider) convertToolCallToBlock(toolCall ToolCall, sequence int) (*llmprovider.Block, error) {
 	// Parse arguments JSON
 	var input map[string]interface{}
 	if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &input); err != nil {
+		p.logger.Error("invalid tool call arguments", "tool_call_id", toolCall.ID, "error", err)
 		return nil, fmt.Errorf("invalid tool call arguments: %w", err)
 	}
 
