@@ -354,6 +354,13 @@ func (p *Provider) handleResponsesEvent(
 		for callID, acc := range state.callArgsByCallID {
 			// Match by item_id from the event
 			if event.ItemID == acc.ItemID || callID == event.ItemID {
+				now := time.Now()
+				if !acc.seenAnyArgs {
+					acc.seenAnyArgs = true
+					acc.firstArgsAt = now
+				}
+				acc.lastAnyArgsAt = now
+
 				// Treat whitespace-only deltas outside JSON strings as non-progress.
 				meaningful := acc.argsProgress.Apply(event.Arguments)
 				if meaningful {
@@ -370,8 +377,8 @@ func (p *Provider) handleResponsesEvent(
 					// Stream delta to client via AG-UI event
 					emitter.ToolCallArgs(callID, event.Arguments)
 
-					acc.seenAnyArgs = true
-					acc.lastMeaningfulArgsAt = time.Now()
+					acc.seenMeaningfulArgs = true
+					acc.lastMeaningfulArgsAt = now
 				} else {
 					dbg.Debug("responses API function args delta ignored (non-meaningful whitespace outside string)",
 						"call_id", callID,

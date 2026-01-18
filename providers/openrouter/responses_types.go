@@ -196,6 +196,9 @@ type responsesToolCallAccumulator struct {
 
 	argsProgress         toolArgsProgress
 	seenAnyArgs          bool
+	firstArgsAt          time.Time
+	lastAnyArgsAt        time.Time
+	seenMeaningfulArgs   bool
 	lastMeaningfulArgsAt time.Time
 }
 
@@ -209,9 +212,17 @@ func newResponsesStreamState() *responsesStreamState {
 
 func (s *responsesStreamState) findStalledToolArgs(now time.Time, timeout time.Duration) (string, *responsesToolCallAccumulator) {
 	for callID, acc := range s.callArgsByCallID {
-		if acc == nil || !acc.seenAnyArgs || acc.lastMeaningfulArgsAt.IsZero() {
+		if acc == nil || !acc.seenAnyArgs || acc.firstArgsAt.IsZero() {
 			continue
 		}
+
+		if !acc.seenMeaningfulArgs || acc.lastMeaningfulArgsAt.IsZero() {
+			if now.Sub(acc.firstArgsAt) >= timeout {
+				return callID, acc
+			}
+			continue
+		}
+
 		if now.Sub(acc.lastMeaningfulArgsAt) >= timeout {
 			return callID, acc
 		}

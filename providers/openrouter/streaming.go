@@ -483,6 +483,13 @@ func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventCh
 						acc.Name = toolCallDelta.Function.Name
 					}
 					if toolCallDelta.Function.Arguments != "" {
+						now := time.Now()
+						if !acc.seenAnyArgs {
+							acc.seenAnyArgs = true
+							acc.firstArgsAt = now
+						}
+						acc.lastAnyArgsAt = now
+
 						// Treat whitespace-only deltas *outside* JSON strings as non-progress.
 						// This prevents infinite TOOL_CALL_ARGS streams where providers/models
 						// keep sending whitespace after an incomplete JSON payload.
@@ -503,8 +510,8 @@ func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventCh
 							// Emit input JSON delta with AG-UI ToolCallArgs
 							emitter.ToolCallArgs(acc.ID, toolCallDelta.Function.Arguments)
 
-							acc.seenAnyArgs = true
-							acc.lastMeaningfulArgsAt = time.Now()
+							acc.seenMeaningfulArgs = true
+							acc.lastMeaningfulArgsAt = now
 						} else {
 							dbg.Debug("openrouter tool call args ignored (non-meaningful whitespace outside string)",
 								"id", acc.ID,
@@ -675,6 +682,9 @@ type accumulatedToolCall struct {
 
 	argsProgress         toolArgsProgress
 	seenAnyArgs          bool
+	firstArgsAt          time.Time
+	lastAnyArgsAt        time.Time
+	seenMeaningfulArgs   bool
 	lastMeaningfulArgsAt time.Time
 }
 
@@ -693,9 +703,19 @@ func findToolCallIndex(toolCallsMap map[int]*accumulatedToolCall, id string) (in
 
 func findStalledToolArgs(toolCallsMap map[int]*accumulatedToolCall, now time.Time, timeout time.Duration) *accumulatedToolCall {
 	for _, acc := range toolCallsMap {
-		if acc == nil || !acc.seenAnyArgs || acc.lastMeaningfulArgsAt.IsZero() {
+		if acc == nil || !acc.seenAnyArgs || acc.firstArgsAt.IsZero() {
 			continue
 		}
+
+		// If we've never seen meaningful args, treat the stream as stalled if the provider
+		// has been sending args deltas (even whitespace) for too long without making progress.
+		if !acc.seenMeaningfulArgs || acc.lastMeaningfulArgsAt.IsZero() {
+			if now.Sub(acc.firstArgsAt) >= timeout {
+				return acc
+			}
+			continue
+		}
+
 		if now.Sub(acc.lastMeaningfulArgsAt) >= timeout {
 			return acc
 		}
