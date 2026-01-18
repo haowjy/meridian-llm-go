@@ -232,6 +232,23 @@ func (p *Provider) streamResponsesEvents(ctx context.Context, body io.ReadCloser
 			); err != nil {
 				return err
 			}
+
+			// Guardrail: treat tool-arg streams as stalled if they stop making meaningful
+			// progress for too long, even if the provider continues to send whitespace.
+			if callID, acc := state.findStalledToolArgs(time.Now(), DefaultStreamingIdleTimeout); acc != nil {
+				dbg.Warn("responses API tool call args stalled",
+					"call_id", callID,
+					"name", acc.Name,
+					"timeout", DefaultStreamingIdleTimeout,
+				)
+				return &llmprovider.ProviderError{
+					Code:      llmprovider.ErrorCodeStreamingIdleTimeout,
+					Provider:  llmprovider.ProviderOpenRouter.String(),
+					Message:   fmt.Sprintf("no meaningful tool call args progress for %v during streaming", DefaultStreamingIdleTimeout),
+					Retryable: true,
+					Err:       llmprovider.ErrStreamingIdleTimeout,
+				}
+			}
 		}
 	}
 
@@ -331,21 +348,36 @@ func (p *Provider) handleResponsesEvent(
 	case ResponsesEventFunctionCallArgsDelta:
 		// Tool call arguments delta - stream to client and accumulate
 		// Find the tool call accumulator
+		if event.Arguments == "" {
+			break
+		}
 		for callID, acc := range state.callArgsByCallID {
 			// Match by item_id from the event
 			if event.ItemID == acc.ItemID || callID == event.ItemID {
-				// Accumulate arguments
-				prevLen := len(acc.Arguments)
-				acc.Arguments += event.Arguments
-				dbg.Debug("responses API function args delta",
-					"call_id", callID,
-					"prev_len", prevLen,
-					"chunk_len", len(event.Arguments),
-					"new_total", len(acc.Arguments),
-				)
+				// Treat whitespace-only deltas outside JSON strings as non-progress.
+				meaningful := acc.argsProgress.Apply(event.Arguments)
+				if meaningful {
+					// Accumulate arguments
+					prevLen := len(acc.Arguments)
+					acc.Arguments += event.Arguments
+					dbg.Debug("responses API function args delta",
+						"call_id", callID,
+						"prev_len", prevLen,
+						"chunk_len", len(event.Arguments),
+						"new_total", len(acc.Arguments),
+					)
 
-				// Stream delta to client via AG-UI event
-				emitter.ToolCallArgs(callID, event.Arguments)
+					// Stream delta to client via AG-UI event
+					emitter.ToolCallArgs(callID, event.Arguments)
+
+					acc.seenAnyArgs = true
+					acc.lastMeaningfulArgsAt = time.Now()
+				} else {
+					dbg.Debug("responses API function args delta ignored (non-meaningful whitespace outside string)",
+						"call_id", callID,
+						"chunk_len", len(event.Arguments),
+					)
+				}
 				break
 			}
 		}

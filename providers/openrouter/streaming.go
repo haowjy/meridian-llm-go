@@ -250,6 +250,14 @@ func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventCh
 	dbg := streamDebug{enabled: p.debugStreamLogs, logger: p.logger}
 	emitter := llmprovider.NewEventEmitter(eventChan)
 
+	// Close body when context is cancelled to unblock scanner.
+	// scanner.Scan() blocks waiting for data and only checks ctx.Done() after reading.
+	// Closing the body forces Scan() to return with an error, enabling immediate cancellation.
+	go func() {
+		<-ctx.Done()
+		body.Close()
+	}()
+
 	// Start line reader goroutine
 	lineChan := make(chan string, 10) // Buffered to avoid blocking scanner
 	scanErrChan := make(chan error, 1)
@@ -475,21 +483,53 @@ func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventCh
 						acc.Name = toolCallDelta.Function.Name
 					}
 					if toolCallDelta.Function.Arguments != "" {
-						prevLength := acc.Arguments.Len()
-						acc.Arguments.WriteString(toolCallDelta.Function.Arguments)
-						newLength := acc.Arguments.Len()
+						// Treat whitespace-only deltas *outside* JSON strings as non-progress.
+						// This prevents infinite TOOL_CALL_ARGS streams where providers/models
+						// keep sending whitespace after an incomplete JSON payload.
+						meaningful := acc.argsProgress.Apply(toolCallDelta.Function.Arguments)
+						if meaningful {
+							prevLength := acc.Arguments.Len()
+							acc.Arguments.WriteString(toolCallDelta.Function.Arguments)
+							newLength := acc.Arguments.Len()
 
-						dbg.Debug("openrouter tool call args accumulated",
-							"id", acc.ID,
-							"map_index", idx,
-							"prev_len", prevLength,
-							"chunk_len", len(toolCallDelta.Function.Arguments),
-							"new_total", newLength,
-						)
+							dbg.Debug("openrouter tool call args accumulated",
+								"id", acc.ID,
+								"map_index", idx,
+								"prev_len", prevLength,
+								"chunk_len", len(toolCallDelta.Function.Arguments),
+								"new_total", newLength,
+							)
 
-						// Emit input JSON delta with AG-UI ToolCallArgs
-						emitter.ToolCallArgs(acc.ID, toolCallDelta.Function.Arguments)
+							// Emit input JSON delta with AG-UI ToolCallArgs
+							emitter.ToolCallArgs(acc.ID, toolCallDelta.Function.Arguments)
+
+							acc.seenAnyArgs = true
+							acc.lastMeaningfulArgsAt = time.Now()
+						} else {
+							dbg.Debug("openrouter tool call args ignored (non-meaningful whitespace outside string)",
+								"id", acc.ID,
+								"map_index", idx,
+								"chunk_len", len(toolCallDelta.Function.Arguments),
+							)
+						}
 					}
+				}
+			}
+
+			// Guardrail: if tool-call args stop making meaningful progress for too long,
+			// treat this as a stalled stream (even if bytes continue arriving).
+			if stalledAcc := findStalledToolArgs(toolCallsMap, time.Now(), DefaultStreamingIdleTimeout); stalledAcc != nil {
+				dbg.Warn("openrouter tool call args stalled",
+					"id", stalledAcc.ID,
+					"name", stalledAcc.Name,
+					"timeout", DefaultStreamingIdleTimeout,
+				)
+				return &llmprovider.ProviderError{
+					Code:      llmprovider.ErrorCodeStreamingIdleTimeout,
+					Provider:  llmprovider.ProviderOpenRouter.String(),
+					Message:   fmt.Sprintf("no meaningful tool call args progress for %v during streaming", DefaultStreamingIdleTimeout),
+					Retryable: true,
+					Err:       llmprovider.ErrStreamingIdleTimeout,
 				}
 			}
 
@@ -632,6 +672,10 @@ type accumulatedToolCall struct {
 	ID        string
 	Name      string
 	Arguments strings.Builder
+
+	argsProgress         toolArgsProgress
+	seenAnyArgs          bool
+	lastMeaningfulArgsAt time.Time
 }
 
 // findToolCallIndex finds the index of a tool call by ID in the accumulator map.
@@ -645,4 +689,16 @@ func findToolCallIndex(toolCallsMap map[int]*accumulatedToolCall, id string) (in
 		}
 	}
 	return 0, false
+}
+
+func findStalledToolArgs(toolCallsMap map[int]*accumulatedToolCall, now time.Time, timeout time.Duration) *accumulatedToolCall {
+	for _, acc := range toolCallsMap {
+		if acc == nil || !acc.seenAnyArgs || acc.lastMeaningfulArgsAt.IsZero() {
+			continue
+		}
+		if now.Sub(acc.lastMeaningfulArgsAt) >= timeout {
+			return acc
+		}
+	}
+	return nil
 }
