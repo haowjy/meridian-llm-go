@@ -82,28 +82,6 @@ func TestBlock_IsAssistantBlock(t *testing.T) {
 	}
 }
 
-func TestBlockDelta_Structure(t *testing.T) {
-	// Test that BlockDelta can be created and accessed
-	delta := &BlockDelta{
-		BlockIndex: 0,
-		BlockType:  stringPtr(BlockTypeText),
-		DeltaType:  DeltaTypeTextDelta,
-		TextDelta:  stringPtr("Hello"),
-	}
-
-	if delta.BlockIndex != 0 {
-		t.Errorf("BlockIndex = %d, want 0", delta.BlockIndex)
-	}
-
-	if delta.BlockType == nil || *delta.BlockType != BlockTypeText {
-		t.Errorf("BlockType = %v, want %s", delta.BlockType, BlockTypeText)
-	}
-
-	if delta.TextDelta == nil || *delta.TextDelta != "Hello" {
-		t.Error("TextDelta not set correctly")
-	}
-}
-
 func TestBlockTypes_Constants(t *testing.T) {
 	// Verify block type constants are defined correctly
 	expectedTypes := map[string]string{
@@ -136,26 +114,3 @@ func TestBlockTypes_Constants(t *testing.T) {
 	}
 }
 
-func TestDeltaTypes_Constants(t *testing.T) {
-	// Verify delta type constants
-	expectedTypes := map[string]string{
-		"DeltaTypeTextDelta":      "text_delta",
-		"DeltaTypeInputJSONDelta": "json_delta", // DEPRECATED: now aliases DeltaTypeJSON
-	}
-
-	actualTypes := map[string]string{
-		"DeltaTypeTextDelta":      DeltaTypeTextDelta,
-		"DeltaTypeInputJSONDelta": DeltaTypeInputJSONDelta,
-	}
-
-	for name, expected := range expectedTypes {
-		actual, ok := actualTypes[name]
-		if !ok {
-			t.Errorf("constant %s not found", name)
-			continue
-		}
-		if actual != expected {
-			t.Errorf("%s = %q, want %q", name, actual, expected)
-		}
-	}
-}

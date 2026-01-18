@@ -147,42 +147,6 @@ func isCutoffModel(model string) bool {
 	return strings.Contains(model, "cutoff") || strings.Contains(model, "small")
 }
 
-// toolTemplate defines a mock tool call template
-type toolTemplate struct {
-	name  string
-	input map[string]interface{}
-}
-
-// getToolTemplates returns the rotating tool templates used in multi-block streaming
-func getToolTemplates() []toolTemplate {
-	return []toolTemplate{
-		{
-			name: "search_files",
-			input: map[string]interface{}{
-				"query":       "lorem ipsum",
-				"max_results": 10,
-				"file_types":  []string{"txt", "md"},
-			},
-		},
-		{
-			name: "analyze_character",
-			input: map[string]interface{}{
-				"name":   "dolor",
-				"traits": []string{"amet", "consectetur", "adipiscing"},
-				"depth":  "detailed",
-			},
-		},
-		{
-			name: "get_outline",
-			input: map[string]interface{}{
-				"document_id":      "doc-lorem-123",
-				"include_chapters": true,
-				"max_depth":        3,
-			},
-		},
-	}
-}
-
 // StreamResponse generates a streaming lorem ipsum response with rotating block types.
 // Speed varies based on model name (lorem-slow, lorem-fast, lorem-medium).
 // Rotates through: text (20 words) → thinking (20 words, if enabled) → tool_use → repeat
@@ -213,14 +177,21 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 	go func() {
 		defer close(eventChan)
 
+		// Create EventEmitter for AG-UI events
+		emitter := llmprovider.NewEventEmitter(eventChan)
+
 		blockIndex := 0
 		totalOutputTokens := 0
 		stopReason := "end_turn"
 		toolIndex := 0 // Rotate through requested tools
 
+		// Generate messageID for AG-UI events
+		messageID := fmt.Sprintf("msg-lorem-%d", time.Now().UnixNano())
+
 		if p.debugStreamLogs {
 			p.logger.Debug("lorem stream started",
 				"model", req.Model,
+				"message_id", messageID,
 				"thinking_enabled", thinkingEnabled,
 				"tools_enabled", toolsEnabled,
 				"max_tokens", maxTokens,
@@ -250,9 +221,9 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 					targetWords = remainingTokens
 				}
 
-				outputTokens, cutoff, err := p.streamTextBlock(ctx, eventChan, blockIndex, targetWords, req.Model)
+				outputTokens, cutoff, err := p.streamTextBlock(ctx, emitter, blockIndex, targetWords, req.Model, messageID)
 				if err != nil {
-					eventChan <- llmprovider.StreamEvent{Error: err}
+					emitter.Error(err)
 					return
 				}
 				totalOutputTokens += outputTokens
@@ -279,9 +250,9 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 					targetWords = remainingTokens
 				}
 
-				outputTokens, cutoff, err := p.streamThinkingBlock(ctx, eventChan, blockIndex, targetWords, req.Model)
+				outputTokens, cutoff, err := p.streamThinkingBlock(ctx, emitter, blockIndex, targetWords, req.Model)
 				if err != nil {
-					eventChan <- llmprovider.StreamEvent{Error: err}
+					emitter.Error(err)
 					return
 				}
 				totalOutputTokens += outputTokens
@@ -313,9 +284,9 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 
 				// Use requested tool (rotate through Tools)
 				builtInTool := params.Tools[toolIndex%len(params.Tools)]
-				outputTokens, err := p.streamToolUseBlockFromBuiltIn(ctx, eventChan, blockIndex, &builtInTool, req.Model)
+				outputTokens, err := p.streamToolUseBlockFromBuiltIn(ctx, emitter, blockIndex, &builtInTool, req.Model)
 				if err != nil {
-					eventChan <- llmprovider.StreamEvent{Error: err}
+					emitter.Error(err)
 					return
 				}
 				totalOutputTokens += outputTokens
@@ -353,20 +324,18 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 		// - "max_tokens" is set inside the loop when cutoff=true (cutoff models only)
 		// - "end_turn" remains for normal completion (non-cutoff models)
 
-		// Send final metadata
+		// Send final metadata via emitter
 		inputTokens := p.estimateTokens(req.Messages)
-		eventChan <- llmprovider.StreamEvent{
-			Metadata: &llmprovider.StreamMetadata{
-				Model:        req.Model,
-				InputTokens:  inputTokens,
-				OutputTokens: totalOutputTokens,
-				StopReason:   stopReason,
-				ResponseMetadata: map[string]interface{}{
-					"mock":     true,
-					"provider": "lorem",
-				},
+		emitter.Metadata(&llmprovider.StreamMetadata{
+			Model:        req.Model,
+			InputTokens:  inputTokens,
+			OutputTokens: totalOutputTokens,
+			StopReason:   stopReason,
+			ResponseMetadata: map[string]interface{}{
+				"mock":     true,
+				"provider": "lorem",
 			},
-		}
+		})
 	}()
 
 	return eventChan, nil
@@ -375,15 +344,10 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 // streamThinkingBlock streams a thinking block with signature and targetWords words.
 // Returns (word count, cutoff flag, error).
 // Signature is sent as the LAST delta (matching Anthropic behavior).
-func (p *Provider) streamThinkingBlock(ctx context.Context, eventChan chan<- llmprovider.StreamEvent, blockIndex int, targetWords int, model string) (int, bool, error) {
-	// Send block start WITHOUT signature (signature comes at the end)
-	thinkingType := llmprovider.BlockTypeThinking
-	eventChan <- llmprovider.StreamEvent{
-		Delta: &llmprovider.BlockDelta{
-			BlockIndex: blockIndex,
-			BlockType:  &thinkingType,
-		},
-	}
+func (p *Provider) streamThinkingBlock(ctx context.Context, emitter *llmprovider.EventEmitter, blockIndex int, targetWords int, model string) (int, bool, error) {
+	// AG-UI: ThinkingStart + ThinkingTextMessageStart for thinking blocks (first-class thinking events)
+	emitter.ThinkingStart(nil)
+	emitter.ThinkingTextMessageStart()
 
 	// Generate thinking text
 	thinkingText := p.generateTextWords(targetWords)
@@ -402,95 +366,29 @@ func (p *Provider) streamThinkingBlock(ctx context.Context, eventChan chan<- llm
 		}
 
 		delta := word + " "
-		eventChan <- llmprovider.StreamEvent{
-			Delta: &llmprovider.BlockDelta{
-				BlockIndex: blockIndex,
-				DeltaType:  llmprovider.DeltaTypeThinking,
-				TextDelta:  &delta,
-			},
-		}
+		// AG-UI: ThinkingTextMessageContent for thinking
+		emitter.ThinkingTextMessageContent(delta)
 
 		time.Sleep(delay)
 		wordsSent++
 	}
 
-	// AFTER all thinking text, send signature as final delta
-	signature := "4k_a" // Mock Anthropic signature
-	eventChan <- llmprovider.StreamEvent{
-		Delta: &llmprovider.BlockDelta{
-			BlockIndex:     blockIndex,
-			DeltaType:      llmprovider.DeltaTypeSignature,
-			SignatureDelta: &signature,
-		},
-	}
+	// AFTER all thinking text, send signature (no AG-UI event for signatures)
+	// Signatures are Anthropic-specific metadata, not part of AG-UI spec
+
+	// AG-UI: ThinkingTextMessageEnd + ThinkingEnd
+	emitter.ThinkingTextMessageEnd()
+	emitter.ThinkingEnd()
 
 	return wordsSent, false, nil
-}
-
-// streamToolUseBlock streams a tool_use block with JSON input.
-// Returns (token count, error).
-func (p *Provider) streamToolUseBlock(ctx context.Context, eventChan chan<- llmprovider.StreamEvent, blockIndex int, tool toolTemplate, model string) (int, error) {
-	// Send block start with tool metadata
-	toolUseType := llmprovider.BlockTypeToolUse
-	toolID := fmt.Sprintf("toolu_%s_%d", tool.name, blockIndex)
-	eventChan <- llmprovider.StreamEvent{
-		Delta: &llmprovider.BlockDelta{
-			BlockIndex:   blockIndex,
-			BlockType:    &toolUseType,
-			DeltaType:    llmprovider.DeltaTypeToolCallStart,
-			ToolCallID:   &toolID,
-			ToolCallName: &tool.name,
-		},
-	}
-
-	// Serialize tool input to JSON
-	jsonBytes, err := json.MarshalIndent(tool.input, "", "  ")
-	if err != nil {
-		p.logger.Error("failed to marshal tool input", "error", err)
-		return 0, fmt.Errorf("failed to marshal tool input: %w", err)
-	}
-	jsonStr := string(jsonBytes)
-
-	// Get delay based on model
-	delay := getStreamDelay(model)
-
-	// Stream JSON character by character (simulating incremental JSON building)
-	for i, char := range jsonStr {
-		select {
-		case <-ctx.Done():
-			return i, ctx.Err()
-		default:
-		}
-
-		delta := string(char)
-		eventChan <- llmprovider.StreamEvent{
-			Delta: &llmprovider.BlockDelta{
-				BlockIndex: blockIndex,
-				DeltaType:  llmprovider.DeltaTypeJSON,
-				JSONDelta:  &delta,
-			},
-		}
-
-		time.Sleep(delay / 10) // JSON streams faster than words
-	}
-
-	// Estimate tokens (rough: 1 token per 4 chars in JSON)
-	tokenCount := len(jsonStr) / 4
-	return tokenCount, nil
 }
 
 // streamTextBlock streams a text block up to maxTokens words.
 // Returns (word count, cutoff flag, error).
 // For cutoff models, generates extra words and stops at maxTokens limit.
-func (p *Provider) streamTextBlock(ctx context.Context, eventChan chan<- llmprovider.StreamEvent, blockIndex int, maxTokens int, model string) (int, bool, error) {
-	// Send block start
-	textType := llmprovider.BlockTypeText
-	eventChan <- llmprovider.StreamEvent{
-		Delta: &llmprovider.BlockDelta{
-			BlockIndex: blockIndex,
-			BlockType:  &textType,
-		},
-	}
+func (p *Provider) streamTextBlock(ctx context.Context, emitter *llmprovider.EventEmitter, blockIndex int, maxTokens int, model string, messageID string) (int, bool, error) {
+	// AG-UI: TextMessageStart
+	emitter.TextMessageStart(messageID, "assistant")
 
 	// Determine target words
 	targetWords := maxTokens
@@ -524,17 +422,15 @@ func (p *Provider) streamTextBlock(ctx context.Context, eventChan chan<- llmprov
 		}
 
 		delta := word + " "
-		eventChan <- llmprovider.StreamEvent{
-			Delta: &llmprovider.BlockDelta{
-				BlockIndex: blockIndex,
-				DeltaType:  llmprovider.DeltaTypeTextDelta,
-				TextDelta:  &delta,
-			},
-		}
+		// AG-UI: TextMessageContent for each word
+		emitter.TextMessageContent(messageID, delta)
 
 		time.Sleep(delay)
 		wordsSent++
 	}
+
+	// AG-UI: TextMessageEnd when text block completes
+	emitter.TextMessageEnd(messageID)
 
 	// If we sent all words without hitting limit, no cutoff
 	return wordsSent, false, nil
@@ -577,7 +473,7 @@ func (p *Provider) generateTextWords(targetWords int) string {
 
 // streamToolUseBlockFromBuiltIn streams a tool_use block based on BuiltInTool.
 // Returns (token count, error).
-func (p *Provider) streamToolUseBlockFromBuiltIn(ctx context.Context, eventChan chan<- llmprovider.StreamEvent, blockIndex int, tool *llmprovider.Tool, model string) (int, error) {
+func (p *Provider) streamToolUseBlockFromBuiltIn(ctx context.Context, emitter *llmprovider.EventEmitter, blockIndex int, tool *llmprovider.Tool, model string) (int, error) {
 	// Generate mock input based on tool function name (OpenAI format)
 	var input map[string]interface{}
 
@@ -612,22 +508,11 @@ func (p *Provider) streamToolUseBlockFromBuiltIn(ctx context.Context, eventChan 
 		}
 	}
 
-	// Send block start with tool metadata
-	toolUseType := llmprovider.BlockTypeToolUse
+	// Generate tool ID
 	toolID := fmt.Sprintf("toolu_%s_%d", tool.Function.Name, blockIndex)
 
-	eventChan <- llmprovider.StreamEvent{
-		Delta: &llmprovider.BlockDelta{
-			BlockIndex:   blockIndex,
-			BlockType:    &toolUseType,
-			DeltaType:    llmprovider.DeltaTypeToolCallStart,
-			ToolCallID:   &toolID,
-			ToolCallName: &tool.Function.Name,
-		},
-	}
-
-	// Note: ExecutionSide is set at the Block level, not in Delta
-	// The consumer will need to check tool capabilities to determine execution side
+	// AG-UI: ToolCallStart (was missing before - critical fix!)
+	emitter.ToolCallStart(toolID, tool.Function.Name, nil)
 
 	// Serialize tool input to JSON
 	jsonBytes, err := json.MarshalIndent(input, "", "  ")
@@ -649,16 +534,14 @@ func (p *Provider) streamToolUseBlockFromBuiltIn(ctx context.Context, eventChan 
 		}
 
 		delta := string(char)
-		eventChan <- llmprovider.StreamEvent{
-			Delta: &llmprovider.BlockDelta{
-				BlockIndex: blockIndex,
-				DeltaType:  llmprovider.DeltaTypeJSON,
-				JSONDelta:  &delta,
-			},
-		}
+		// AG-UI: ToolCallArgs for each JSON character
+		emitter.ToolCallArgs(toolID, delta)
 
 		time.Sleep(delay / 10) // JSON streams faster than words
 	}
+
+	// AG-UI: ToolCallEnd when JSON streaming completes
+	emitter.ToolCallEnd(toolID)
 
 	// Estimate tokens (rough: 1 token per 4 chars in JSON)
 	tokenCount := len(jsonStr) / 4

@@ -72,15 +72,15 @@ For **Meridian backend integration**, see:
 ## Examples
 
 ```go
-// Streaming
-stream, err := provider.GenerateStream(ctx, req)
-for event := range stream.Events() {
-    if event.Delta != nil {
-        // Handle incremental delta
-        fmt.Printf("Delta: %+v\n", event.Delta)
+// Streaming (AG-UI Protocol)
+eventChan, _ := provider.StreamResponse(ctx, req)
+for event := range eventChan {
+    // Handle text content (AG-UI event)
+    if content, ok := event.GetTextMessageContent(); ok {
+        fmt.Print(content.Delta)
     }
+    // Handle complete blocks (for persistence)
     if event.Block != nil {
-        // Handle complete block
         fmt.Printf("Block complete: %+v\n", event.Block)
     }
 }

@@ -9,7 +9,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 
-	"github.com/haowjy/meridian-llm-go"
+	llmprovider "github.com/haowjy/meridian-llm-go"
 )
 
 // streamDebug wraps debug logging for streaming operations.
@@ -159,14 +159,10 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 					return
 				}
 
-				// Transform Anthropic event to library StreamEvent
+				// Transform Anthropic event to library events via EventEmitter
 				// Pass accumulated message so we can emit complete blocks on ContentBlockStop
-				streamEvent := p.transformAnthropicStreamEvent(evt.event, &message, tools, dbg)
-
-				// Send to channel if not empty
-				if streamEvent.Delta != nil || streamEvent.Block != nil || streamEvent.Error != nil {
-					eventChan <- streamEvent
-				}
+				emitter := llmprovider.NewEventEmitter(eventChan)
+				p.emitAnthropicStreamEvents(evt.event, &message, tools, emitter, dbg)
 			}
 		}
 
@@ -205,13 +201,15 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 	return eventChan, nil
 }
 
-// transformAnthropicStreamEvent converts an Anthropic streaming event to a library StreamEvent.
+// emitAnthropicStreamEvents converts Anthropic streaming events and emits them via EventEmitter.
 //
 // The message parameter is the SDK's accumulated message, which contains complete ContentBlocks
 // as they finish streaming. We use this to emit complete, normalized blocks when ContentBlockStop arrives.
 //
 // The tools parameter contains the original tool definitions from the request, used to preserve
 // ExecutionSide when converting tool_use blocks.
+//
+// The emitter is used to emit AG-UI events to the stream channel.
 //
 // The dbg parameter provides debug logging (metadata-only, no sensitive content).
 //
@@ -222,68 +220,37 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 // - ContentBlockStop: Current block finished → we emit complete block here
 // - MessageDelta: Message-level delta (stop_reason, stop_sequence)
 // - MessageStop: Streaming complete
-func (p *Provider) transformAnthropicStreamEvent(event anthropic.MessageStreamEventUnion, message *anthropic.Message, tools []llmprovider.Tool, dbg streamDebug) llmprovider.StreamEvent {
+func (p *Provider) emitAnthropicStreamEvents(event anthropic.MessageStreamEventUnion, message *anthropic.Message, tools []llmprovider.Tool, emitter *llmprovider.EventEmitter, dbg streamDebug) {
 	switch e := event.AsAny().(type) {
 	case anthropic.MessageStartEvent:
 		// MessageStart event - not needed for deltas, metadata comes at the end
-		return llmprovider.StreamEvent{} // Empty event, ignored by consumers
+		return
 
 	case anthropic.ContentBlockStartEvent:
-		// ContentBlockStart - emit block start delta with BlockType set.
-		// For provider-specific types, we normalize BlockType to library block types
-		// so downstream consumers see consistent values (e.g., "web_search_use", "web_search_result").
+		// ContentBlockStart - emit AG-UI start events
 		dbg.Debug("content_block_start",
 			"index", e.Index,
 			"type", e.ContentBlock.Type,
 		)
-		var blockType string
+
+		messageID := string(message.ID)
+		role := string(message.Role)
+
+		// Emit AG-UI events based on block type
 		switch e.ContentBlock.Type {
 		case "text":
-			blockType = llmprovider.BlockTypeText
-		case "thinking":
-			blockType = llmprovider.BlockTypeThinking
-		case "tool_use":
-			blockType = llmprovider.BlockTypeToolUse
-		case "server_tool_use":
-			// Server-side tools: web_search_use vs other server tools
-			if e.ContentBlock.Name == "web_search" {
-				blockType = llmprovider.BlockTypeWebSearch
-			} else {
-				blockType = llmprovider.BlockTypeToolUse
-			}
-		case "web_search_tool_result":
-			blockType = llmprovider.BlockTypeWebSearchResult
-		default:
-			// Fallback to raw provider type string
-			blockType = string(e.ContentBlock.Type)
-		}
-
-		delta := &llmprovider.BlockDelta{
-			BlockIndex: int(e.Index),
-			BlockType:  &blockType, // Signals block start with normalized type
-		}
-
-		// Set appropriate DeltaType based on block type
-		switch e.ContentBlock.Type {
-		case "text":
-			delta.DeltaType = llmprovider.DeltaTypeText
+			// Text message start
+			emitter.TextMessageStart(messageID, role)
 
 		case "thinking":
-			delta.DeltaType = llmprovider.DeltaTypeThinking
-			// Initial signature comes in signature_delta events, not here
-			// (Anthropic sends empty signature:"" in content_block_start)
+			// Thinking phase: emit ThinkingStart + ThinkingTextMessageStart
+			emitter.ThinkingStart(nil)
+			emitter.ThinkingTextMessageStart()
 
 		case "tool_use":
-			delta.DeltaType = llmprovider.DeltaTypeToolCallStart
-			if e.ContentBlock.ID != "" {
-				toolID := e.ContentBlock.ID
-				delta.ToolCallID = &toolID
-				delta.ToolUseID = &toolID // Legacy field
-			}
-			if e.ContentBlock.Name != "" {
-				toolName := e.ContentBlock.Name
-				delta.ToolCallName = &toolName
-				delta.ToolName = &toolName // Legacy field
+			// Tool call start
+			if e.ContentBlock.ID != "" && e.ContentBlock.Name != "" {
+				emitter.ToolCallStart(e.ContentBlock.ID, e.ContentBlock.Name, &messageID)
 				dbg.Debug("tool_call_start",
 					"index", e.Index,
 					"id", e.ContentBlock.ID,
@@ -292,95 +259,81 @@ func (p *Provider) transformAnthropicStreamEvent(event anthropic.MessageStreamEv
 			}
 
 		case "server_tool_use":
-		// Server-side tools (web_search) arrive complete in ContentBlockStart
-		// No input_json_delta events will follow - input is complete on arrival
-		delta.DeltaType = llmprovider.DeltaTypeToolCallStart
-		if e.ContentBlock.ID != "" {
-			toolID := e.ContentBlock.ID
-			delta.ToolCallID = &toolID
-			delta.ToolUseID = &toolID // Legacy field
-		}
-		if e.ContentBlock.Name != "" {
-			toolName := e.ContentBlock.Name
-			delta.ToolCallName = &toolName
-			delta.ToolName = &toolName // Legacy field
-			dbg.Debug("server_tool_use_start",
-				"index", e.Index,
-				"id", e.ContentBlock.ID,
-				"name", e.ContentBlock.Name,
-			)
-		}
-		// Note: Input is complete but we don't send it in the delta
-		// The complete block (with ProviderData) will be emitted on ContentBlockStop
+			// Server-side tools (web_search) arrive complete in ContentBlockStart
+			// No input_json_delta events will follow - input is complete on arrival
+			if e.ContentBlock.ID != "" && e.ContentBlock.Name != "" {
+				emitter.ToolCallStart(e.ContentBlock.ID, e.ContentBlock.Name, &messageID)
+				dbg.Debug("server_tool_use_start",
+					"index", e.Index,
+					"id", e.ContentBlock.ID,
+					"name", e.ContentBlock.Name,
+				)
+			}
 
 		case "web_search_tool_result":
-		// Web search results arrive complete in ContentBlockStart
-		// No deltas will follow - this is a complete block
-		// Emit a delta to signal block start, complete data comes in ContentBlockStop
-		delta.DeltaType = llmprovider.DeltaTypeToolResult
-		if e.ContentBlock.ToolUseID != "" {
-			toolID := e.ContentBlock.ToolUseID
-			delta.ToolCallID = &toolID
-			delta.ToolUseID = &toolID // Legacy field
+			// Web search results arrive complete in ContentBlockStart
+			// No deltas will follow - this is a complete block
 			dbg.Debug("web_search_result_start",
 				"index", e.Index,
 				"tool_use_id", e.ContentBlock.ToolUseID,
 			)
+			// AG-UI: ToolCallResult will be emitted on ContentBlockStop when we have complete data
 		}
-		}
-
-		return llmprovider.StreamEvent{Delta: delta}
 
 	case anthropic.ContentBlockDeltaEvent:
-		// ContentBlockDelta - emit content delta
-		delta := &llmprovider.BlockDelta{
-			BlockIndex: int(e.Index),
-		}
+		// ContentBlockDelta - emit content delta events
+		messageID := string(message.ID)
 
-		// Extract delta based on type
 		switch e.Delta.Type {
 		case "text_delta":
-			delta.DeltaType = llmprovider.DeltaTypeText
 			text := e.Delta.Text
-			delta.TextDelta = &text
-			dbg.Debug("text_delta",
-				"index", e.Index,
-				"chunk_len", len(text),
-			)
+			if text != "" {
+				emitter.TextMessageContent(messageID, text)
+				dbg.Debug("text_delta",
+					"index", e.Index,
+					"chunk_len", len(text),
+				)
+			}
 
 		case "thinking_delta":
-			delta.DeltaType = llmprovider.DeltaTypeThinking
 			text := e.Delta.Thinking
-			delta.TextDelta = &text
-			dbg.Debug("thinking_delta",
-				"index", e.Index,
-				"chunk_len", len(text),
-			)
+			if text != "" {
+				emitter.ThinkingTextMessageContent(text)
+				dbg.Debug("thinking_delta",
+					"index", e.Index,
+					"chunk_len", len(text),
+				)
+			}
 
 		case "signature_delta":
-			delta.DeltaType = llmprovider.DeltaTypeSignature
+			// Signature deltas are Anthropic-specific, no AG-UI event
+			// We could emit a custom event if needed
 			sig := e.Delta.Signature
-			delta.SignatureDelta = &sig
 			dbg.Debug("signature_delta",
 				"index", e.Index,
 				"chunk_len", len(sig),
 			)
 
 		case "input_json_delta":
-			delta.DeltaType = llmprovider.DeltaTypeJSON
 			jsonDelta := e.Delta.PartialJSON
-			delta.JSONDelta = &jsonDelta
-			dbg.Debug("input_json_delta",
-				"index", e.Index,
-				"chunk_len", len(jsonDelta),
-			)
+			if jsonDelta != "" {
+				// Get tool_use_id from the accumulated block (SDK accumulates as we stream)
+				blockIndex := int(e.Index)
+				if blockIndex >= 0 && blockIndex < len(message.Content) {
+					block := message.Content[blockIndex]
+					if block.ID != "" {
+						emitter.ToolCallArgs(string(block.ID), jsonDelta)
+						dbg.Debug("input_json_delta",
+							"index", e.Index,
+							"chunk_len", len(jsonDelta),
+						)
+					}
+				}
+			}
 		}
 
-		return llmprovider.StreamEvent{Delta: delta}
-
 	case anthropic.ContentBlockStopEvent:
-		// ContentBlockStop - emit complete normalized block using shared conversion logic
-		// The SDK has accumulated the complete block in message.Content[index]
+		// ContentBlockStop - emit complete normalized block and end events
 		blockIndex := int(e.Index)
 
 		dbg.Debug("content_block_stop",
@@ -390,23 +343,48 @@ func (p *Provider) transformAnthropicStreamEvent(event anthropic.MessageStreamEv
 		// Validate block index
 		if blockIndex < 0 || blockIndex >= len(message.Content) {
 			p.logger.Error("invalid block index in stream", "block_index", blockIndex, "message_blocks", len(message.Content))
-			return llmprovider.StreamEvent{
-				Error: fmt.Errorf("invalid block index %d, message has %d blocks", blockIndex, len(message.Content)),
+			emitter.Error(fmt.Errorf("invalid block index %d, message has %d blocks", blockIndex, len(message.Content)))
+			return
+		}
+
+		// Get the accumulated block from SDK
+		anthropicBlock := message.Content[blockIndex]
+		messageID := string(message.ID)
+
+		// Emit AG-UI end events based on block type
+		switch anthropicBlock.Type {
+		case "text":
+			emitter.TextMessageEnd(messageID)
+
+		case "thinking":
+			// Thinking phase end: ThinkingTextMessageEnd + ThinkingEnd
+			emitter.ThinkingTextMessageEnd()
+			emitter.ThinkingEnd()
+
+		case "tool_use", "server_tool_use":
+			if anthropicBlock.ID != "" {
+				emitter.ToolCallEnd(string(anthropicBlock.ID))
+			}
+
+		case "web_search_tool_result":
+			// Emit tool call result for web search
+			if anthropicBlock.ToolUseID != "" {
+				// Serialize the search results as JSON content
+				resultContent, _ := json.Marshal(anthropicBlock.Content)
+				emitter.ToolCallResult(messageID, anthropicBlock.ToolUseID, string(resultContent))
 			}
 		}
 
 		// Convert the complete Anthropic block to library format using shared logic
-		// This handles normalization of provider-specific types (server_tool_use → web_search,
-		// web_search_tool_result → web_search_result)
-		block, err := p.convertAnthropicBlock(message.Content[blockIndex], blockIndex, tools)
+		// This handles normalization of provider-specific types
+		block, err := p.convertAnthropicBlock(anthropicBlock, blockIndex, tools)
 		if err != nil {
 			p.logger.Error("failed to convert block in stream", "block_index", blockIndex, "error", err)
-			return llmprovider.StreamEvent{
-				Error: fmt.Errorf("convert block %d: %w", blockIndex, err),
-			}
+			emitter.Error(fmt.Errorf("convert block %d: %w", blockIndex, err))
+			return
 		}
 
-		// Log finalized block metadata (type, ID, name, args length for tool_use)
+		// Log finalized block metadata
 		logArgs := []any{"index", blockIndex, "block_type", block.BlockType}
 		if block.BlockType == llmprovider.BlockTypeToolUse {
 			if id, ok := block.Content["id"].(string); ok {
@@ -416,26 +394,25 @@ func (p *Provider) transformAnthropicStreamEvent(event anthropic.MessageStreamEv
 				logArgs = append(logArgs, "name", name)
 			}
 			if input, ok := block.Content["input"]; ok {
-				// Log length of input (not the content itself)
 				inputJSON, _ := json.Marshal(input)
 				logArgs = append(logArgs, "args_len", len(inputJSON))
 			}
 		}
 		dbg.Debug("block_finalized", logArgs...)
 
-		return llmprovider.StreamEvent{Block: block}
+		// Emit complete block for persistence
+		emitter.Block(block)
 
 	case anthropic.MessageDeltaEvent:
 		// MessageDelta - contains stop_reason, handled in FinalMessage
-		return llmprovider.StreamEvent{} // Empty event
+		return
 
 	case anthropic.MessageStopEvent:
 		// MessageStop - final metadata sent after stream.Next() completes
-		return llmprovider.StreamEvent{} // Empty event
+		return
 
 	default:
 		// Unknown event type - log warning but don't fail
-		// TODO: Add structured logging
-		return llmprovider.StreamEvent{} // Empty event
+		return
 	}
 }

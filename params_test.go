@@ -174,6 +174,9 @@ func TestRequestParams_GetMaxTokens(t *testing.T) {
 }
 
 func TestRequestParams_GetThinkingBudgetTokens(t *testing.T) {
+	// Use a consistent maxTokens for testing ratio calculations
+	maxTokens := 16384
+
 	tests := []struct {
 		name     string
 		params   *RequestParams
@@ -192,28 +195,36 @@ func TestRequestParams_GetThinkingBudgetTokens(t *testing.T) {
 			expected: 0,
 		},
 		{
-			name: "thinking enabled with low level",
+			name: "thinking enabled with low level (20%)",
 			params: &RequestParams{
 				ThinkingEnabled: boolPtr(true),
 				ThinkingLevel:   stringPtr("low"),
 			},
-			expected: 2000,
+			expected: 3276, // 16384 * 0.20 = 3276.8 → 3276
 		},
 		{
-			name: "thinking enabled with medium level",
+			name: "thinking enabled with medium level (50%)",
 			params: &RequestParams{
 				ThinkingEnabled: boolPtr(true),
 				ThinkingLevel:   stringPtr("medium"),
 			},
-			expected: 5000,
+			expected: 8192, // 16384 * 0.50 = 8192
 		},
 		{
-			name: "thinking enabled with high level",
+			name: "thinking enabled with high level (80%)",
 			params: &RequestParams{
 				ThinkingEnabled: boolPtr(true),
 				ThinkingLevel:   stringPtr("high"),
 			},
-			expected: 12000,
+			expected: 13107, // 16384 * 0.80 = 13107.2 → 13107
+		},
+		{
+			name: "thinking enabled with xhigh level (95%)",
+			params: &RequestParams{
+				ThinkingEnabled: boolPtr(true),
+				ThinkingLevel:   stringPtr("xhigh"),
+			},
+			expected: 15564, // 16384 * 0.95 = 15564.8 → 15564
 		},
 		{
 			name: "unknown thinking level returns error",
@@ -233,7 +244,7 @@ func TestRequestParams_GetThinkingBudgetTokens(t *testing.T) {
 				// Nil params means no thinking
 				result = 0
 			} else {
-				result, err = tt.params.GetThinkingBudgetTokens()
+				result, err = tt.params.GetThinkingBudgetTokens(maxTokens)
 
 				// Special case: "unknown thinking level" should return an error
 				if tt.name == "unknown thinking level returns error" {
@@ -250,6 +261,63 @@ func TestRequestParams_GetThinkingBudgetTokens(t *testing.T) {
 
 			if result != tt.expected {
 				t.Errorf("GetThinkingBudgetTokens() = %d, want %d", result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestCalculateThinkingBudget(t *testing.T) {
+	tests := []struct {
+		name      string
+		maxTokens int
+		effort    string
+		expected  int
+		wantErr   bool
+	}{
+		{
+			name:      "low effort with 8192 tokens",
+			maxTokens: 8192,
+			effort:    "low",
+			expected:  1638, // 8192 * 0.20 = 1638.4 → 1638
+		},
+		{
+			name:      "medium effort with 8192 tokens",
+			maxTokens: 8192,
+			effort:    "medium",
+			expected:  4096, // 8192 * 0.50 = 4096
+		},
+		{
+			name:      "high effort with 8192 tokens",
+			maxTokens: 8192,
+			effort:    "high",
+			expected:  6553, // 8192 * 0.80 = 6553.6 → 6553
+		},
+		{
+			name:      "xhigh effort with 8192 tokens",
+			maxTokens: 8192,
+			effort:    "xhigh",
+			expected:  7782, // 8192 * 0.95 = 7782.4 → 7782
+		},
+		{
+			name:      "invalid effort level",
+			maxTokens: 8192,
+			effort:    "invalid",
+			expected:  0,
+			wantErr:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := CalculateThinkingBudget(tt.maxTokens, tt.effort)
+
+			if (err != nil) != tt.wantErr {
+				t.Errorf("CalculateThinkingBudget() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			if result != tt.expected {
+				t.Errorf("CalculateThinkingBudget() = %d, want %d", result, tt.expected)
 			}
 		})
 	}

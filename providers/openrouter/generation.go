@@ -178,7 +178,7 @@ func (p *Provider) GetGenerationStats(ctx context.Context, generationID string) 
 		p.logger.Error("failed to query generation stats", "generation_id", generationID, "error", err)
 		return nil, fmt.Errorf("failed to query generation stats: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Read response body
 	body, err := io.ReadAll(resp.Body)
@@ -253,7 +253,7 @@ func (p *Provider) CancelGeneration(ctx context.Context, generationID string) er
 		p.logger.Error("cancel API call failed", "generation_id", generationID, "error", err)
 		return fmt.Errorf("cancel API call failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Read response body for error details
 	body, err := io.ReadAll(resp.Body)

@@ -149,7 +149,7 @@ func (p *Provider) GenerateResponse(ctx context.Context, req *llmprovider.Genera
 		p.logger.Error("openrouter HTTP request failed", "model", req.Model, "error", err)
 		return nil, fmt.Errorf("openrouter HTTP request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Handle error responses
 	if resp.StatusCode != http.StatusOK {

@@ -65,15 +65,20 @@ func (d streamDebug) Warn(msg string, args ...any) {
 // ===== Streaming Block Emitter (SOLID-compliant) =====
 
 // emitStreamingBlocks emits stream events based on parsed delta and state transition.
-// Emits both deltas (for real-time UI) and complete blocks (for persistence).
+// Uses EventEmitter for AG-UI events and emits complete blocks for persistence.
+//
+// NOTE: messageID should be a stable turn-level identifier, not generationID.
+// The backend should provide this via IDFactory. Until then, we use generationID
+// as a placeholder (marked with TODO).
 func emitStreamingBlocks(
 	parsed *ParsedDelta,
 	transition BlockTransition,
 	state *BlockState,
 	thinkingContent *strings.Builder,
 	textContent *strings.Builder,
+	messageID string, // TODO: Should be turn-level messageID, not generationID
 	dbg streamDebug,
-	eventChan chan<- llmprovider.StreamEvent,
+	emitter *llmprovider.EventEmitter,
 ) error {
 	providerIDStr := llmprovider.ProviderOpenRouter.String()
 
@@ -90,7 +95,7 @@ func emitStreamingBlocks(
 
 		for i, block := range blocks {
 			dbg.Debug("openrouter web search block emitted", "index", i, "block_type", block.BlockType, "sequence", block.Sequence)
-			eventChan <- llmprovider.StreamEvent{Block: block}
+			emitter.Block(block)
 		}
 
 		oldIndex := state.CurrentIndex
@@ -115,27 +120,23 @@ func emitStreamingBlocks(
 					Provider:    &providerIDStr,
 				}
 
-				// No provider_data for OpenRouter reasoning
-				// Reconstruction from TextContent via convertThinkingToReasoningDetails()
-
-				eventChan <- llmprovider.StreamEvent{Block: block}
+				// Emit thinking end events and block
+				emitter.ThinkingTextMessageEnd()
+				emitter.ThinkingEnd()
+				emitter.Block(block)
 			}
 		}
 	}
 
 	// 3. Start new block if transition says so
 	if transition.StartNew {
-		blockType := llmprovider.BlockTypeText
 		if transition.NewType == "thinking" {
-			blockType = llmprovider.BlockTypeThinking
-		}
-
-		eventChan <- llmprovider.StreamEvent{
-			Delta: &llmprovider.BlockDelta{
-				BlockIndex: transition.NewIndex,
-				BlockType:  &blockType,
-				DeltaType:  llmprovider.DeltaTypeText,
-			},
+			// Start thinking phase
+			emitter.ThinkingStart(nil)
+			emitter.ThinkingTextMessageStart()
+		} else {
+			// Start text message
+			emitter.TextMessageStart(messageID, "assistant")
 		}
 
 		state.CurrentType = transition.NewType
@@ -147,14 +148,8 @@ func emitStreamingBlocks(
 		// Accumulate for complete block
 		thinkingContent.WriteString(parsed.Thinking.Text)
 
-		// Emit delta for real-time UI
-		eventChan <- llmprovider.StreamEvent{
-			Delta: &llmprovider.BlockDelta{
-				BlockIndex: state.CurrentIndex,
-				DeltaType:  llmprovider.DeltaTypeText,
-				TextDelta:  &parsed.Thinking.Text,
-			},
-		}
+		// Emit thinking content
+		emitter.ThinkingTextMessageContent(parsed.Thinking.Text)
 	}
 
 	// 5. Emit text delta and accumulate content
@@ -162,14 +157,8 @@ func emitStreamingBlocks(
 		// Accumulate for complete block
 		textContent.WriteString(parsed.Text.Text)
 
-		// Emit delta for real-time UI
-		eventChan <- llmprovider.StreamEvent{
-			Delta: &llmprovider.BlockDelta{
-				BlockIndex: state.CurrentIndex,
-				DeltaType:  llmprovider.DeltaTypeText,
-				TextDelta:  &parsed.Text.Text,
-			},
-		}
+		// Emit text content
+		emitter.TextMessageContent(messageID, parsed.Text.Text)
 	}
 
 	return nil
@@ -220,7 +209,7 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 
 	// Check for immediate errors
 	if resp.StatusCode != http.StatusOK {
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		return nil, p.handleErrorResponse(resp, req.Model)
 	}
 
@@ -230,7 +219,7 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 	// Start streaming goroutine
 	go func() {
 		defer close(eventChan)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		if err := p.streamEvents(ctx, resp.Body, eventChan); err != nil {
 			eventChan <- llmprovider.StreamEvent{Error: err}
@@ -245,6 +234,7 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 // returns ErrStreamingIdleTimeout.
 func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventChan chan<- llmprovider.StreamEvent) error {
 	dbg := streamDebug{enabled: p.debugStreamLogs, logger: p.logger}
+	emitter := llmprovider.NewEventEmitter(eventChan)
 
 	// Start line reader goroutine
 	lineChan := make(chan string, 10) // Buffered to avoid blocking scanner
@@ -403,7 +393,8 @@ func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventCh
 
 			// Emit blocks/deltas based on parsed data and transition
 			// Pass accumulators so complete blocks can be built for persistence
-			if err := emitStreamingBlocks(parsed, transition, &state, &thinkingContent, &textContent, dbg, eventChan); err != nil {
+			// TODO: messageID should be turn-level, not generationID. Backend should provide this.
+			if err := emitStreamingBlocks(parsed, transition, &state, &thinkingContent, &textContent, generationID, dbg, emitter); err != nil {
 				return err
 			}
 
@@ -448,7 +439,6 @@ func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventCh
 						acc = &accumulatedToolCall{}
 						toolCallsMap[idx] = acc
 
-						blockType := llmprovider.BlockTypeToolUse
 						blockIndex := state.CurrentIndex + 1 + idx
 						dbg.Debug("openrouter tool call start",
 							"map_index", idx,
@@ -457,15 +447,10 @@ func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventCh
 							"id", toolCallDelta.ID,
 							"name", toolCallDelta.Function.Name,
 						)
-						eventChan <- llmprovider.StreamEvent{
-							Delta: &llmprovider.BlockDelta{
-								BlockIndex:   blockIndex,
-								BlockType:    &blockType,
-								DeltaType:    llmprovider.DeltaTypeToolCallStart,
-								ToolCallID:   &toolCallDelta.ID,
-								ToolCallName: &toolCallDelta.Function.Name,
-							},
-						}
+						// AG-UI: ToolCallStart
+						// TODO: parentMessageID should be turn-level messageID, not generationID
+						emitter.ToolCallStart(toolCallDelta.ID, toolCallDelta.Function.Name, &generationID)
+						_ = blockIndex // Suppress unused variable warning
 					}
 
 					// Accumulate data
@@ -488,15 +473,8 @@ func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventCh
 							"new_total", newLength,
 						)
 
-						// Emit input JSON delta
-						blockIndex := state.CurrentIndex + 1 + idx
-						eventChan <- llmprovider.StreamEvent{
-							Delta: &llmprovider.BlockDelta{
-								BlockIndex: blockIndex,
-								DeltaType:  llmprovider.DeltaTypeJSON,
-								JSONDelta:  &toolCallDelta.Function.Arguments,
-							},
-						}
+						// Emit input JSON delta with AG-UI ToolCallArgs
+						emitter.ToolCallArgs(acc.ID, toolCallDelta.Function.Arguments)
 					}
 				}
 			}
@@ -528,7 +506,10 @@ finalize:
 			// No provider_data for OpenRouter reasoning
 			// Reconstruction from TextContent via convertThinkingToReasoningDetails()
 
-			eventChan <- llmprovider.StreamEvent{Block: block}
+			// AG-UI: ThinkingEnd events and block
+			emitter.ThinkingTextMessageEnd()
+			emitter.ThinkingEnd()
+			emitter.Block(block)
 			state.CurrentIndex++
 		}
 	}
@@ -536,14 +517,15 @@ finalize:
 	// Emit complete text block if it was started (for persistence)
 	if state.CurrentType == "text" && textContent.Len() > 0 {
 		text := textContent.String()
-		eventChan <- llmprovider.StreamEvent{
-			Block: &llmprovider.Block{
-				BlockType:   llmprovider.BlockTypeText,
-				Sequence:    state.CurrentIndex,
-				TextContent: &text,
-				Provider:    &providerIDStr,
-			},
-		}
+		// AG-UI: TextMessageEnd for text
+		// TODO: messageID should be turn-level, not generationID
+		emitter.TextMessageEnd(generationID)
+		emitter.Block(&llmprovider.Block{
+			BlockType:   llmprovider.BlockTypeText,
+			Sequence:    state.CurrentIndex,
+			TextContent: &text,
+			Provider:    &providerIDStr,
+		})
 		state.CurrentIndex++
 	}
 
@@ -600,15 +582,15 @@ finalize:
 		// All OpenRouter tools are backend-side (executed by our backend)
 		executionSide := llmprovider.ExecutionSideServer
 
-		eventChan <- llmprovider.StreamEvent{
-			Block: &llmprovider.Block{
-				BlockType:     llmprovider.BlockTypeToolUse,
-				Sequence:      state.CurrentIndex,
-				Content:       content,
-				ExecutionSide: &executionSide,
-				Provider:      &providerIDStr,
-			},
-		}
+		// AG-UI: ToolCallEnd + Block
+		emitter.ToolCallEnd(acc.ID)
+		emitter.Block(&llmprovider.Block{
+			BlockType:     llmprovider.BlockTypeToolUse,
+			Sequence:      state.CurrentIndex,
+			Content:       content,
+			ExecutionSide: &executionSide,
+			Provider:      &providerIDStr,
+		})
 		state.CurrentIndex++
 	}
 
@@ -626,9 +608,7 @@ finalize:
 	}
 	// Note: If usage is nil, InputTokens and OutputTokens default to 0
 
-	eventChan <- llmprovider.StreamEvent{
-		Metadata: metadata,
-	}
+	emitter.Metadata(metadata)
 
 	return nil
 }

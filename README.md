@@ -118,18 +118,21 @@ func main() {
         panic(err)
     }
 
-    // Read events
+    // Read events (AG-UI protocol)
     for event := range eventChan {
         if event.Error != nil {
             fmt.Println("Error:", event.Error)
             break
         }
 
-        if event.Delta != nil {
-            // Print text deltas as they arrive
-            if event.Delta.TextDelta != nil {
-                fmt.Print(*event.Delta.TextDelta)
-            }
+        // Handle AG-UI text events
+        if content, ok := event.GetTextMessageContent(); ok {
+            fmt.Print(content.Delta)
+        }
+
+        // Handle AG-UI thinking events (extended thinking mode)
+        if thinking, ok := event.GetThinkingTextMessageContent(); ok {
+            fmt.Printf("[thinking] %s", thinking.Delta)
         }
 
         if event.Metadata != nil {
@@ -210,25 +213,25 @@ Supported block types:
 - `image` - Images (URL or base64)
 - `document` - Provider file uploads
 
-### Streaming
+### Streaming (AG-UI Protocol)
 
 ```go
 type StreamEvent struct {
-    Delta    *BlockDelta      // Incremental content
-    Metadata *StreamMetadata  // Final metadata (when complete)
-    Error    error            // Any errors
+    Event    events.Event       // AG-UI SDK event (see below)
+    Block    *Block             // Complete block for persistence
+    Metadata *StreamMetadata    // Final metadata (when complete)
+    Error    error              // Any errors
 }
 
-type BlockDelta struct {
-    BlockIndex        int
-    BlockType         string
-    DeltaType         string  // "text_delta", "input_json_delta"
-    TextDelta         *string
-    InputJSONDelta    *string
-    ToolUseID         *string
-    ToolName          *string
-    ThinkingSignature *string
-}
+// AG-UI event types (from ag-ui-protocol/ag-ui SDK):
+// - TEXT_MESSAGE_START, TEXT_MESSAGE_CONTENT, TEXT_MESSAGE_END
+// - THINKING_START, THINKING_TEXT_MESSAGE_CONTENT, THINKING_END
+// - TOOL_CALL_START, TOOL_CALL_ARGS, TOOL_CALL_END
+
+// Type-safe accessors:
+// event.GetTextMessageContent()  → *events.TextMessageContentEvent
+// event.GetToolCallStart()       → *events.ToolCallStartEvent
+// event.GetThinkingStart()       → *events.ThinkingStartEvent
 ```
 
 ## RequestParams (Unified)
@@ -405,8 +408,9 @@ meridian-llm-go/
 ├── provider.go          # Provider interface only
 ├── request.go           # GenerateRequest, Message
 ├── response.go          # GenerateResponse
-├── streaming.go         # StreamEvent, StreamMetadata
-├── types.go             # Block, BlockDelta
+├── streaming.go         # StreamEvent, StreamMetadata (AG-UI events)
+├── event_emitter.go     # EventEmitter for AG-UI event creation
+├── types.go             # Block
 ├── params.go            # RequestParams + validation
 ├── schema.go            # ToolInputSchema, PropertySchema (typed JSON Schema)
 ├── tools.go             # Tool, FunctionDetails

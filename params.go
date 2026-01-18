@@ -38,8 +38,8 @@ type RequestParams struct {
 	// ThinkingEnabled enables extended thinking mode (Claude only)
 	ThinkingEnabled *bool `json:"thinking_enabled,omitempty"`
 
-	// ThinkingLevel sets the thinking budget: "low", "medium", "high"
-	// Maps to token budgets: low=2000, medium=5000, high=12000
+	// ThinkingLevel sets the thinking budget: "low", "medium", "high", "xhigh"
+	// Uses ratio-based calculation: low=20%, medium=50%, high=80%, xhigh=95% of max_tokens
 	ThinkingLevel *string `json:"thinking_level,omitempty"`
 
 	// ThinkingBudget explicitly sets thinking token budget (overrides ThinkingLevel)
@@ -178,12 +178,12 @@ func ValidateRequestParams(params *RequestParams) error {
 	}
 
 	if params.ThinkingLevel != nil {
-		validLevels := map[string]bool{"low": true, "medium": true, "high": true}
+		validLevels := map[string]bool{"low": true, "medium": true, "high": true, "xhigh": true}
 		if !validLevels[*params.ThinkingLevel] {
 			return &ValidationError{
 				Field:  "thinking_level",
 				Value:  *params.ThinkingLevel,
-				Reason: "must be 'low', 'medium', or 'high'",
+				Reason: "must be 'low', 'medium', 'high', or 'xhigh'",
 				Err:    ErrInvalidRequest,
 			}
 		}
@@ -251,29 +251,41 @@ func (rp *RequestParams) GetTemperature(defaultValue float64) float64 {
 	return defaultValue
 }
 
-// GetThinkingBudgetTokens converts thinking_level to token budget using default budgets
-func (rp *RequestParams) GetThinkingBudgetTokens() (int, error) {
+// GetThinkingBudgetTokens calculates thinking budget based on max_tokens and thinking_level.
+// Uses ratio-based calculation to ensure max_tokens > thinking.budget_tokens constraint is satisfied.
+func (rp *RequestParams) GetThinkingBudgetTokens(maxTokens int) (int, error) {
 	if rp.ThinkingLevel == nil {
 		return 0, nil // Thinking not enabled
 	}
 
-	return ConvertEffortToBudget(*rp.ThinkingLevel)
+	return CalculateThinkingBudget(maxTokens, *rp.ThinkingLevel)
 }
 
-// ConvertEffortToBudget converts effort level to token budget
-// Uses standard default budgets across all providers
-func ConvertEffortToBudget(effort string) (int, error) {
-	budgets := map[string]int{
-		"low":    2000,
-		"medium": 5000,
-		"high":   12000,
+// ConvertEffortToRatio returns the thinking budget ratio for a given effort level.
+// The ratio determines what percentage of max_tokens is allocated to thinking.
+func ConvertEffortToRatio(effort string) (float64, error) {
+	ratios := map[string]float64{
+		"low":    0.20, // 20% of max_tokens for thinking
+		"medium": 0.50, // 50% of max_tokens for thinking
+		"high":   0.80, // 80% of max_tokens for thinking
+		"xhigh":  0.95, // 95% of max_tokens for thinking (max reasoning)
 	}
 
-	budget, ok := budgets[effort]
+	ratio, ok := ratios[effort]
 	if !ok {
 		globalLogger.Error("unknown effort level", "effort", effort)
-		return 0, fmt.Errorf("unknown effort level: %s (valid: low, medium, high)", effort)
+		return 0, fmt.Errorf("unknown effort level: %s (valid: low, medium, high, xhigh)", effort)
 	}
 
-	return budget, nil
+	return ratio, nil
+}
+
+// CalculateThinkingBudget calculates the thinking token budget based on max_tokens and effort level.
+// This ratio-based approach ensures the Anthropic constraint (max_tokens > budget_tokens) is always satisfied.
+func CalculateThinkingBudget(maxTokens int, effort string) (int, error) {
+	ratio, err := ConvertEffortToRatio(effort)
+	if err != nil {
+		return 0, err
+	}
+	return int(float64(maxTokens) * ratio), nil
 }

@@ -234,11 +234,7 @@ func IsInvalidRequest(err error) bool {
 	}
 
 	var validationErr *ValidationError
-	if errors.As(err, &validationErr) {
-		return true
-	}
-
-	return false
+	return errors.As(err, &validationErr)
 }
 
 // IsAuthError checks if an error is related to authentication.

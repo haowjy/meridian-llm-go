@@ -341,28 +341,36 @@ for _, block := range turn.Blocks {
 
 ## Streaming Tool Execution
 
-In streaming mode, tool calls appear as deltas:
+In streaming mode, tool calls appear as AG-UI events:
 
 ```go
-stream, _ := provider.GenerateStream(ctx, req)
+eventChan, _ := provider.StreamResponse(ctx, req)
 
-for event := range stream.Events() {
-    if event.Delta != nil {
-        switch event.Delta.DeltaType {
-        case "tool_call_start":
-            // Tool call begins
-            toolID := event.Delta.ToolCallID
-            toolName := event.Delta.ToolCallName
+var toolInputBuffer strings.Builder
 
-        case "input_json_delta":
-            // Incremental tool input
-            jsonDelta := event.Delta.InputJSONDelta
-        }
+for event := range eventChan {
+    // Tool call started
+    if start, ok := event.GetToolCallStart(); ok {
+        fmt.Printf("Tool: %s (ID: %s)\n", start.ToolCallName, start.ToolCallID)
+        toolInputBuffer.Reset()
     }
 
+    // Incremental JSON args
+    if args, ok := event.GetToolCallArgs(); ok {
+        toolInputBuffer.WriteString(args.Delta)
+    }
+
+    // Tool call complete - execute it
+    if end, ok := event.GetToolCallEnd(); ok {
+        var input map[string]interface{}
+        json.Unmarshal([]byte(toolInputBuffer.String()), &input)
+        result := executeTool(end.ToolCallID, input)
+        // Continue with tool result...
+    }
+
+    // Or use complete block for execution
     if event.Block != nil && event.Block.BlockType == llm.BlockTypeToolUse {
-        // Complete tool_use block available
-        // Execute tool and send result
+        executeToolAndContinue(event.Block)
     }
 }
 ```

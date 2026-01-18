@@ -60,12 +60,15 @@ func main() {
 			log.Fatalf("Streaming error: %v", event.Error)
 		}
 
-		// Handle deltas (incremental content)
-		if event.Delta != nil {
-			if event.Delta.TextDelta != nil {
-				// Print text as it arrives (no newline - continuous stream)
-				fmt.Print(*event.Delta.TextDelta)
-			}
+		// Handle AG-UI events (text message content)
+		if evt, ok := event.GetTextMessageContent(); ok {
+			// Print text as it arrives (no newline - continuous stream)
+			fmt.Print(evt.Delta)
+		}
+
+		// Handle AG-UI thinking content
+		if evt, ok := event.GetThinkingTextMessageContent(); ok {
+			fmt.Print(evt.Delta)
 		}
 
 		// Handle final metadata

@@ -153,7 +153,7 @@ func TestProvider_StreamResponse(t *testing.T) {
 		t.Fatalf("StreamResponse failed: %v", err)
 	}
 
-	var deltaCount int
+	var aguiEventCount int
 	var metadata *llmprovider.StreamMetadata
 	var lastError error
 
@@ -161,8 +161,8 @@ func TestProvider_StreamResponse(t *testing.T) {
 		if event.Error != nil {
 			lastError = event.Error
 		}
-		if event.Delta != nil {
-			deltaCount++
+		if event.IsAGUIEvent() {
+			aguiEventCount++
 		}
 		if event.Metadata != nil {
 			metadata = event.Metadata
@@ -173,8 +173,8 @@ func TestProvider_StreamResponse(t *testing.T) {
 		t.Errorf("received error event: %v", lastError)
 	}
 
-	if deltaCount == 0 {
-		t.Error("expected at least one delta event")
+	if aguiEventCount == 0 {
+		t.Error("expected at least one AG-UI event")
 	}
 
 	if metadata == nil {
@@ -237,7 +237,16 @@ func TestProvider_StreamResponse_Speed(t *testing.T) {
 			var secondDelta time.Time
 
 			for event := range eventChan {
-				if event.Delta != nil && event.Delta.TextDelta != nil {
+				// Check for AG-UI text content or thinking content events
+				if _, ok := event.GetTextMessageContent(); ok {
+					if firstDelta.IsZero() {
+						firstDelta = time.Now()
+					} else if secondDelta.IsZero() {
+						secondDelta = time.Now()
+						break
+					}
+				}
+				if _, ok := event.GetThinkingTextMessageContent(); ok {
 					if firstDelta.IsZero() {
 						firstDelta = time.Now()
 					} else if secondDelta.IsZero() {
@@ -248,7 +257,7 @@ func TestProvider_StreamResponse_Speed(t *testing.T) {
 			}
 
 			if firstDelta.IsZero() || secondDelta.IsZero() {
-				t.Skip("not enough deltas to measure speed")
+				t.Skip("not enough AG-UI content events to measure speed")
 			}
 
 			actualDelay := secondDelta.Sub(firstDelta)

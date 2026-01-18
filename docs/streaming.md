@@ -3,36 +3,35 @@ detail: minimal
 audience: library users
 ---
 
-# Streaming
+# Streaming (AG-UI Protocol)
 
-Real-time LLM response streaming with deltas and complete blocks.
+Real-time LLM response streaming using the AG-UI protocol standard.
 
 ## Quick Start
 
 ```go
-stream, err := provider.GenerateStream(ctx, req)
+eventChan, err := provider.StreamResponse(ctx, req)
 if err != nil {
     return err
 }
-defer stream.Close()
 
-for event := range stream.Events() {
+for event := range eventChan {
     if event.Error != nil {
         return event.Error
     }
 
-    if event.Delta != nil {
-        // Incremental content for real-time UI
-        fmt.Printf("Delta: %s\n", event.Delta.DeltaType)
+    // Handle AG-UI text events
+    if content, ok := event.GetTextMessageContent(); ok {
+        fmt.Print(content.Delta)
     }
 
+    // Handle complete blocks (for persistence)
     if event.Block != nil {
-        // Complete block ready for persistence
-        fmt.Printf("Block: %s\n", event.Block.BlockType)
+        saveBlock(event.Block)
     }
 
+    // Final metadata (last event)
     if event.Metadata != nil {
-        // Final metadata (last event)
         fmt.Printf("Done. Tokens: %d\n", event.Metadata.OutputTokens)
     }
 }
@@ -40,14 +39,14 @@ for event := range stream.Events() {
 
 ## StreamEvent
 
-Each streaming event contains one of:
+Each streaming event contains AG-UI protocol events plus Meridian-specific fields:
 
 ```go
 type StreamEvent struct {
-    Delta    *BlockDelta       // Incremental content (or nil)
-    Block    *Block            // Complete block (or nil)
-    Metadata *StreamMetadata   // Final metadata (or nil)
-    Error    error             // Error (or nil)
+    Event    events.Event       // AG-UI protocol event (see below)
+    Block    *Block             // Complete block for persistence
+    Metadata *StreamMetadata    // Final response metadata
+    Error    error              // Error (if any)
 }
 ```
 
@@ -55,7 +54,7 @@ type StreamEvent struct {
 
 ```mermaid
 graph LR
-    A[Start] --> B[Delta events]
+    A[Start] --> B[AG-UI Events]
     B --> B
     B --> C[Block event]
     C --> D{More blocks?}
@@ -68,48 +67,95 @@ graph LR
     style F fill:#7d4d4d
 ```
 
-## BlockDelta
+## AG-UI Event Types
 
-Incremental content updates for real-time UI:
+The library uses the [AG-UI Protocol](https://github.com/ag-ui-protocol/ag-ui) for streaming events:
+
+### Text Message Events
+
+| Event Type | Purpose | Key Fields |
+|-----------|---------|------------|
+| `TEXT_MESSAGE_START` | Text block started | `MessageID`, `Role` |
+| `TEXT_MESSAGE_CONTENT` | Incremental text | `MessageID`, `Delta` |
+| `TEXT_MESSAGE_END` | Text block complete | `MessageID` |
+
+### Thinking Events (Extended Thinking)
+
+| Event Type | Purpose | Key Fields |
+|-----------|---------|------------|
+| `THINKING_START` | Thinking phase started | `Title` (optional) |
+| `THINKING_TEXT_MESSAGE_START` | Thinking text started | - |
+| `THINKING_TEXT_MESSAGE_CONTENT` | Incremental thinking | `Delta` |
+| `THINKING_TEXT_MESSAGE_END` | Thinking text ended | - |
+| `THINKING_END` | Thinking phase complete | - |
+
+### Tool Call Events
+
+| Event Type | Purpose | Key Fields |
+|-----------|---------|------------|
+| `TOOL_CALL_START` | Tool call started | `ToolCallID`, `ToolCallName`, `ParentMessageID` |
+| `TOOL_CALL_ARGS` | Incremental JSON args | `ToolCallID`, `Delta` |
+| `TOOL_CALL_END` | Tool call complete | `ToolCallID` |
+| `TOOL_CALL_RESULT` | Tool execution result | `ToolCallID`, `Content` |
+
+### Lifecycle Events
+
+| Event Type | Purpose | Key Fields |
+|-----------|---------|------------|
+| `RUN_STARTED` | Run/turn started | `RunID`, `ThreadID` |
+| `RUN_FINISHED` | Run completed successfully | `RunID` |
+| `RUN_ERROR` | Run failed | `Message`, `RunID` |
+| `STEP_STARTED` | Step started (e.g., LLM call) | `StepName` |
+| `STEP_FINISHED` | Step completed | `StepName` |
+
+## Type-Safe Accessors
+
+StreamEvent provides type-safe accessors for AG-UI events:
 
 ```go
-type BlockDelta struct {
-    DeltaType       string  // Delta type (see table below)
-    BlockIndex      int     // Which block this delta belongs to
-    TextDelta       *string // Incremental text (or nil)
-    InputJSONDelta  *string // Incremental tool input JSON (or nil)
-    ToolCallID      *string // Tool call ID (or nil)
-    ToolCallName    *string // Tool name (or nil)
-    // ... other delta fields
+for event := range eventChan {
+    // Text content
+    if content, ok := event.GetTextMessageContent(); ok {
+        fmt.Print(content.Delta)
+    }
+
+    // Thinking content
+    if thinking, ok := event.GetThinkingTextMessageContent(); ok {
+        fmt.Printf("[thinking] %s", thinking.Delta)
+    }
+
+    // Tool call start
+    if toolStart, ok := event.GetToolCallStart(); ok {
+        fmt.Printf("Calling tool: %s\n", toolStart.ToolCallName)
+    }
+
+    // Tool call args (JSON delta)
+    if toolArgs, ok := event.GetToolCallArgs(); ok {
+        jsonBuffer.WriteString(toolArgs.Delta)
+    }
 }
 ```
 
-### Delta Types
-
-| DeltaType | Used For | Fields | Example |
-|-----------|----------|--------|---------|
-| `text_delta` | Text block | `TextDelta` | `{DeltaType: "text_delta", TextDelta: "Hello"}` |
-| `thinking_delta` | Thinking block | `TextDelta` | `{DeltaType: "thinking_delta", TextDelta: "Analyzing..."}` |
-| `tool_call_start` | Tool use block | `ToolCallID`, `ToolCallName` | `{DeltaType: "tool_call_start", ToolCallID: "call_123", ToolCallName: "search"}` |
-| `input_json_delta` | Tool use block | `InputJSONDelta` | `{DeltaType: "input_json_delta", InputJSONDelta: "{\"query\":\""}` |
-| `tool_result_start` | Web search result | `ToolCallID` (via metadata) | `{DeltaType: "tool_result_start"}` |
-| `usage_delta` | Turn metadata | `InputTokens`, `OutputTokens` | `{DeltaType: "usage_delta", OutputTokens: 150}` |
+**Available accessors:**
+- `GetTextMessageStart()`, `GetTextMessageContent()`, `GetTextMessageEnd()`
+- `GetThinkingStart()`, `GetThinkingTextMessageContent()`, `GetThinkingEnd()`
+- `GetToolCallStart()`, `GetToolCallArgs()`, `GetToolCallEnd()`
+- `GetRunStarted()`, `GetRunFinished()`, `GetRunError()`
+- `GetStepStarted()`, `GetStepFinished()`
 
 ## Complete Blocks
 
-When a block finishes, you receive a complete `Block`:
+When a block finishes streaming, you receive a complete `Block` for persistence:
 
 ```go
 if event.Block != nil {
-    // Block is complete and normalized
-    // Ready for database persistence
     switch event.Block.BlockType {
     case llm.BlockTypeText:
         saveTextBlock(event.Block)
     case llm.BlockTypeToolUse:
         executeToolAndContinue(event.Block)
-    case llm.BlockTypeWebSearchResult:
-        displaySearchResults(event.Block)
+    case llm.BlockTypeThinking:
+        saveThinkingBlock(event.Block)
     }
 }
 ```
@@ -122,107 +168,114 @@ Final event contains completion metadata:
 
 ```go
 type StreamMetadata struct {
-    Model            string  // Actual model used
-    InputTokens      int     // Input tokens
-    OutputTokens     int     // Output tokens
-    StopReason       string  // Why it stopped ("end_turn", "max_tokens", "tool_use")
-    ResponseMetadata map[string]interface{} // Provider-specific data
-}
-```
-
-Example:
-```go
-if event.Metadata != nil {
-    log.Printf("Completed: %d tokens, reason: %s",
-        event.Metadata.OutputTokens,
-        event.Metadata.StopReason)
+    Model            string
+    InputTokens      int
+    OutputTokens     int
+    StopReason       string  // "end_turn", "max_tokens", "tool_use"
+    GenerationID     string  // Provider-specific ID
+    ResponseMetadata map[string]interface{}
 }
 ```
 
 ## Error Handling
 
-Errors can occur at any point:
-
 ```go
-for event := range stream.Events() {
+for event := range eventChan {
     if event.Error != nil {
-        var llmErr *llm.LLMError
+        var llmErr *llmprovider.ProviderError
         if errors.As(event.Error, &llmErr) {
-            // Normalized error with category and retryability
-            log.Printf("LLM error: %s (retryable: %t)",
-                llmErr.Category, llmErr.Retryable)
+            log.Printf("Provider error: %s (retryable: %t)",
+                llmErr.Message, llmErr.Retryable)
         }
         return event.Error
     }
-
     // Process event...
 }
 ```
 
-See [errors.md](errors.md) for error categories and handling.
+See [errors.md](errors.md) for error categories.
 
 ## Streaming with Tools
 
-### Server-Side Tools (web_search)
-
-Provider executes automatically, results stream back:
+### Tool Call Streaming
 
 ```go
-stream, _ := provider.GenerateStream(ctx, req)
+var toolInputBuffer strings.Builder
 
-for event := range stream.Events() {
-    if event.Delta != nil && event.Delta.DeltaType == "tool_result_start" {
-        fmt.Println("Search starting...")
+for event := range eventChan {
+    // Tool call started
+    if start, ok := event.GetToolCallStart(); ok {
+        fmt.Printf("Tool: %s (ID: %s)\n", start.ToolCallName, start.ToolCallID)
+        toolInputBuffer.Reset()
     }
 
-    if event.Block != nil && event.Block.BlockType == llm.BlockTypeWebSearchResult {
-        // Complete search results
-        results := event.Block.Content["results"]
-        displaySearchResults(results)
+    // Accumulate JSON args
+    if args, ok := event.GetToolCallArgs(); ok {
+        toolInputBuffer.WriteString(args.Delta)
+    }
+
+    // Tool call complete - execute it
+    if end, ok := event.GetToolCallEnd(); ok {
+        input := json.Unmarshal(toolInputBuffer.String())
+        result := executeTool(end.ToolCallID, input)
+        // Continue with tool result...
     }
 }
 ```
 
-### Client-Side Tools (bash, custom)
-
-You must execute and stream result back:
+### Tool Continuation
 
 ```go
-stream, _ := provider.GenerateStream(ctx, req)
-
-for event := range stream.Events() {
-    if event.Block != nil && event.Block.BlockType == llm.BlockTypeToolUse {
-        toolName, _ := event.Block.GetToolName()
-        toolInput, _ := event.Block.GetToolInput()
-        toolUseID, _ := event.Block.GetToolUseID()
-
-        // Execute tool
-        result := executeTool(toolName, toolInput)
-
-        // Create result block
-        resultBlock := &llm.Block{
-            BlockType: llm.BlockTypeToolResult,
-            Content: map[string]interface{}{
-                "tool_use_id": toolUseID,
-                "is_error":    false,
-            },
-            TextContent: &result,
-        }
-
-        // Continue conversation with tool result
-        req2 := &llm.GenerateRequest{
-            Model: req.Model,
-            Messages: append(originalMessages,
-                llm.Message{Role: llm.RoleAssistant, Blocks: allBlocks},
-                llm.Message{Role: llm.RoleUser, Blocks: []*llm.Block{resultBlock}},
-            ),
-        }
-
-        // Stream continuation
-        stream2, _ := provider.GenerateStream(ctx, req2)
-        // ... process stream2
-    }
+// After executing a tool, continue the conversation:
+resultBlock := &llmprovider.Block{
+    BlockType: llmprovider.BlockTypeToolResult,
+    Content: map[string]interface{}{
+        "tool_use_id": toolCallID,
+        "is_error":    false,
+    },
+    TextContent: &resultText,
 }
+
+// Add tool result and stream continuation
+req2 := &llmprovider.GenerateRequest{
+    Model: req.Model,
+    Messages: append(originalMessages,
+        llmprovider.Message{Role: llmprovider.RoleAssistant, Blocks: assistantBlocks},
+        llmprovider.Message{Role: llmprovider.RoleUser, Blocks: []*llmprovider.Block{resultBlock}},
+    ),
+}
+eventChan2, _ := provider.StreamResponse(ctx, req2)
+```
+
+## EventEmitter (Provider Authors)
+
+When implementing a provider, use `EventEmitter` for consistent AG-UI event emission:
+
+```go
+eventChan := make(chan llmprovider.StreamEvent, 10)
+emitter := llmprovider.NewEventEmitter(eventChan)
+
+// Emit text message
+emitter.TextMessageStart("msg-123", "assistant")
+emitter.TextMessageContent("msg-123", "Hello, ")
+emitter.TextMessageContent("msg-123", "world!")
+emitter.TextMessageEnd("msg-123")
+
+// Emit tool call
+emitter.ToolCallStart("call-456", "search", &messageID)
+emitter.ToolCallArgs("call-456", `{"query":"test"}`)
+emitter.ToolCallEnd("call-456")
+
+// Emit thinking (extended thinking mode)
+emitter.ThinkingStart(nil)
+emitter.ThinkingTextMessageStart()
+emitter.ThinkingTextMessageContent("Analyzing the question...")
+emitter.ThinkingTextMessageEnd()
+emitter.ThinkingEnd()
+
+// Emit complete block and metadata
+emitter.Block(completeBlock)
+emitter.Metadata(streamMetadata)
 ```
 
 ## Advanced Patterns
@@ -232,33 +285,15 @@ for event := range stream.Events() {
 ```go
 var textBuffer strings.Builder
 
-for event := range stream.Events() {
-    if event.Delta != nil && event.Delta.TextDelta != nil {
-        textBuffer.WriteString(*event.Delta.TextDelta)
-        updateUI(textBuffer.String()) // Update in real-time
+for event := range eventChan {
+    if content, ok := event.GetTextMessageContent(); ok {
+        textBuffer.WriteString(content.Delta)
+        updateUI(textBuffer.String())
     }
 
-    if event.Block != nil && event.Block.BlockType == llm.BlockTypeText {
+    if event.Block != nil && event.Block.BlockType == llmprovider.BlockTypeText {
         // Block contains complete text
-        finalText := *event.Block.TextContent
-        saveToDatabase(finalText)
-    }
-}
-```
-
-### Multiple Blocks
-
-```go
-var blocks []*llm.Block
-
-for event := range stream.Events() {
-    if event.Block != nil {
-        blocks = append(blocks, event.Block)
-    }
-
-    if event.Metadata != nil {
-        // All blocks complete
-        log.Printf("Received %d blocks", len(blocks))
+        saveToDatabase(*event.Block.TextContent)
     }
 }
 ```
@@ -269,7 +304,7 @@ for event := range stream.Events() {
 ctx, cancel := context.WithCancel(context.Background())
 defer cancel()
 
-stream, _ := provider.GenerateStream(ctx, req)
+eventChan, _ := provider.StreamResponse(ctx, req)
 
 // Cancel from another goroutine
 go func() {
@@ -277,30 +312,30 @@ go func() {
     cancel() // Stops streaming
 }()
 
-for event := range stream.Events() {
+for event := range eventChan {
     // Will exit when context cancelled
 }
 ```
 
 ## Provider Differences
 
-The library normalizes provider streaming into consistent `StreamEvent` format:
+The library normalizes provider streaming into consistent AG-UI events:
 
 | Provider | Native Format | Normalized To |
 |----------|--------------|---------------|
-| **Anthropic** | SSE with `content_block_*` events | `BlockDelta` + `Block` |
-| **OpenAI** | JSON chunks with `delta` | `BlockDelta` + `Block` |
-| **Gemini** | `GenerateContentResponseChunk` | `BlockDelta` + `Block` |
+| **Anthropic** | SSE with `content_block_*` | AG-UI events |
+| **OpenAI** | JSON chunks with `delta` | AG-UI events |
+| **OpenRouter** | OpenAI-compatible | AG-UI events |
 
-All providers produce the same `StreamEvent` structure.
+All providers produce the same `StreamEvent` structure with AG-UI events.
 
 ## Stream Lifecycle
 
 ```mermaid
 graph TD
-    A[GenerateStream] --> B{Provider Streaming}
+    A[StreamResponse] --> B{Provider Streaming}
     B --> C[Adapter receives provider event]
-    C --> D[Convert to Delta/Block]
+    C --> D[Convert to AG-UI Event]
     D --> E[Send StreamEvent]
     E --> F{More events?}
     F -->|Yes| C
@@ -315,16 +350,16 @@ graph TD
 ## API Reference
 
 **Types:**
-- `StreamEvent` - Container for delta, block, metadata, or error
-- `BlockDelta` - Incremental content update
+- `StreamEvent` - Container for AG-UI event, block, metadata, or error
 - `StreamMetadata` - Final completion data
+- `EventEmitter` - Helper for emitting AG-UI events
 
-**Methods:**
-- `provider.GenerateStream(ctx, req) (*Stream, error)` - Start streaming
-- `stream.Events() <-chan StreamEvent` - Event channel
-- `stream.Close() error` - Close stream (auto-closes on completion)
+**Accessors:**
+- `event.IsAGUIEvent() bool` - Check if event contains AG-UI event
+- `event.GetEventType() events.EventType` - Get AG-UI event type
+- `event.Get*()` - Type-safe accessors for each event type
 
-**See:** `streaming.go`, `types.go`
+**See:** `streaming.go`, `event_emitter.go`
 
 ## Examples
 
@@ -337,6 +372,7 @@ See `examples/` directory:
 - [blocks.md](blocks.md) - Block types and content schemas
 - [tools.md](tools.md) - Tool execution in streaming
 - [errors.md](errors.md) - Error handling
+- [AG-UI Protocol](https://github.com/ag-ui-protocol/ag-ui) - Event specification
 
 For **backend streaming architecture** (SSE, catchup, persistence), see:
 - `../../_docs/technical/backend/architecture/streaming-architecture.md`

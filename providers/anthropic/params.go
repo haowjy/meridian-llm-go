@@ -25,8 +25,14 @@ func (p *Provider) buildMessageParams(req *llmprovider.GenerateRequest) (anthrop
 		params = &llmprovider.RequestParams{}
 	}
 
-	// Build request parameters with defaults
-	maxTokens := int64(params.GetMaxTokens(4096))
+	// Determine default max_tokens based on whether thinking is enabled.
+	// Thinking models need higher max_tokens to accommodate both thinking and response.
+	defaultMaxTokens := 4096
+	if params.ThinkingEnabled != nil && *params.ThinkingEnabled {
+		defaultMaxTokens = 16384 // Thinking models need more headroom
+	}
+
+	maxTokens := int64(params.GetMaxTokens(defaultMaxTokens))
 
 	apiParams := anthropic.MessageNewParams{
 		Model:     anthropic.Model(req.Model),
@@ -64,9 +70,10 @@ func (p *Provider) buildMessageParams(req *llmprovider.GenerateRequest) (anthrop
 		}
 	}
 
-	// Thinking mode - convert user-friendly level to token budget
+	// Thinking mode - calculate budget as ratio of max_tokens.
+	// This ensures the Anthropic constraint (max_tokens > budget_tokens) is satisfied by design.
 	if params.ThinkingEnabled != nil && *params.ThinkingEnabled {
-		budgetTokens, err := params.GetThinkingBudgetTokens()
+		budgetTokens, err := params.GetThinkingBudgetTokens(int(maxTokens))
 		if err != nil {
 			p.logger.Error("failed to get thinking budget", "error", err)
 			return anthropic.MessageNewParams{}, fmt.Errorf("failed to get thinking budget: %w", err)

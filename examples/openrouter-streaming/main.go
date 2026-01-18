@@ -149,12 +149,15 @@ func main() {
 			}
 		}
 
-		// Handle deltas (real-time streaming)
-		if event.Delta != nil {
-			if event.Delta.TextDelta != nil {
-				// Print text as it arrives (no newline - continuous stream)
-				fmt.Print(*event.Delta.TextDelta)
-			}
+		// Handle AG-UI text message content (real-time streaming)
+		if evt, ok := event.GetTextMessageContent(); ok {
+			// Print text as it arrives (no newline - continuous stream)
+			fmt.Print(evt.Delta)
+		}
+
+		// Handle AG-UI thinking content (real-time streaming)
+		if evt, ok := event.GetThinkingTextMessageContent(); ok {
+			fmt.Print(evt.Delta)
 		}
 
 		// Handle final metadata

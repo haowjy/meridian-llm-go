@@ -84,9 +84,6 @@ func main() {
 		log.Fatalf("Failed to start streaming: %v", err)
 	}
 
-	// Track which block we're currently receiving
-	var currentBlockType *string // BlockType is now *string (optional, signals block start)
-
 	// Read streaming events
 	for event := range eventChan {
 		// Handle errors
@@ -94,26 +91,26 @@ func main() {
 			log.Fatalf("Streaming error: %v", event.Error)
 		}
 
-		// Handle deltas (incremental content)
-		if event.Delta != nil {
-			// Check if we started a new block (BlockType is set on first delta only)
-			if event.Delta.BlockType != nil {
-				currentBlockType = event.Delta.BlockType
+		// Handle AG-UI thinking block start
+		if _, ok := event.GetThinkingStart(); ok {
+			fmt.Println("🧠 THINKING BLOCK:")
+			fmt.Println("---")
+		}
 
-				// Print block header
-				if *currentBlockType == llmprovider.BlockTypeThinking {
-					fmt.Println("🧠 THINKING BLOCK:")
-					fmt.Println("---")
-				} else if *currentBlockType == llmprovider.BlockTypeText {
-					fmt.Println("\n💬 ANSWER BLOCK:")
-					fmt.Println("---")
-				}
-			}
+		// Handle AG-UI thinking text content
+		if evt, ok := event.GetThinkingTextMessageContent(); ok {
+			fmt.Print(evt.Delta)
+		}
 
-			// Print text deltas as they arrive
-			if event.Delta.TextDelta != nil {
-				fmt.Print(*event.Delta.TextDelta)
-			}
+		// Handle AG-UI text message start (answer block)
+		if _, ok := event.GetTextMessageStart(); ok {
+			fmt.Println("\n💬 ANSWER BLOCK:")
+			fmt.Println("---")
+		}
+
+		// Handle AG-UI text message content
+		if evt, ok := event.GetTextMessageContent(); ok {
+			fmt.Print(evt.Delta)
 		}
 
 		// Handle final metadata
