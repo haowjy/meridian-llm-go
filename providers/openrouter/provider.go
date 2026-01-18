@@ -18,6 +18,11 @@ import (
 // OpenRouter proxies requests to multiple LLM providers (Anthropic, OpenAI, Google, etc.)
 // using an OpenAI-compatible format.
 //
+// API Selection:
+// By default, uses the Chat Completions API (/api/v1/chat/completions).
+// The Responses API (/api/v1/responses) can be enabled via WithResponsesAPI option.
+// Responses API provides better tool call streaming with item-based events.
+//
 // Web Search Support:
 // The :online suffix enables web search for compatible models.
 // Example: "moonshotai/kimi-k2-thinking:online"
@@ -33,6 +38,7 @@ type Provider struct {
 	baseURL         string
 	logger          *slog.Logger
 	debugStreamLogs bool
+	useResponsesAPI bool // When true, use Responses API instead of Chat Completions
 }
 
 type Option func(*Provider)
@@ -48,6 +54,20 @@ func WithLogger(logger *slog.Logger) Option {
 func WithDebugStreamLogs(enabled bool) Option {
 	return func(p *Provider) {
 		p.debugStreamLogs = enabled
+	}
+}
+
+// WithResponsesAPI enables the Responses API (/api/v1/responses) instead of Chat Completions.
+// The Responses API provides better tool call streaming with item-based events:
+// - Tool call arguments stream via response.function_call_arguments.delta
+// - Each tool call has a stable call_id for tracking
+// - Better structured event model for complex multi-tool scenarios
+//
+// Note: Responses API may have different model support compared to Chat Completions.
+// If streaming fails, consider falling back to Chat Completions API.
+func WithResponsesAPI(enabled bool) Option {
+	return func(p *Provider) {
+		p.useResponsesAPI = enabled
 	}
 }
 

@@ -167,7 +167,21 @@ func emitStreamingBlocks(
 // ===== End of streaming block emitter =====
 
 // StreamResponse generates a streaming response from OpenRouter.
+// Routes to Responses API or Chat Completions API based on provider configuration.
 func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.GenerateRequest) (<-chan llmprovider.StreamEvent, error) {
+	// Route to Responses API if enabled
+	// Responses API provides better tool call streaming with item-based events
+	if p.useResponsesAPI {
+		return p.StreamResponsesAPI(ctx, req)
+	}
+
+	// Default: Use Chat Completions API (existing implementation)
+	return p.streamChatCompletionsAPI(ctx, req)
+}
+
+// streamChatCompletionsAPI generates a streaming response using the Chat Completions API.
+// This is the original implementation, now factored out for clarity.
+func (p *Provider) streamChatCompletionsAPI(ctx context.Context, req *llmprovider.GenerateRequest) (<-chan llmprovider.StreamEvent, error) {
 	// Validate model
 	if !p.SupportsModel(req.Model) {
 		return nil, &llmprovider.ModelError{
@@ -411,7 +425,7 @@ func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventCh
 						"openrouter_index", indexFromOR,
 						"id", toolCallDelta.ID,
 						"name", toolCallDelta.Function.Name,
-						"args_len", len(toolCallDelta.Function.Arguments),
+						"args", toolCallDelta.Function.Arguments,
 					)
 
 					// Determine the map index to use (priority order):
@@ -530,7 +544,7 @@ finalize:
 	}
 
 	// Tool call blocks (emit in order)
-	dbg.Debug("openrouter finalizing tool calls", "total", len(toolCallsMap), "current_index", state.CurrentIndex)
+	dbg.Debug("openrouter finalizing tool calls", "total", toolCallsMap, "current_index", state.CurrentIndex)
 
 	for idx := 0; idx < len(toolCallsMap); idx++ {
 		acc, exists := toolCallsMap[idx]
