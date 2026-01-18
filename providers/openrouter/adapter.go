@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/haowjy/meridian-llm-go"
+	"github.com/haowjy/meridian-llm-go/internal/streamutil"
 )
 
 // ===== Data Structures for SOLID-compliant block parsing =====
@@ -71,6 +72,9 @@ func extractThinkingInfo(details []ReasoningDetail) *ThinkingInfo {
 	}
 
 	var text strings.Builder
+	appendSummary := func(summary string) {
+		streamutil.AppendWithOptionalSeparator(&text, summary, "\n\n")
+	}
 	for _, detail := range details {
 		// Extract text based on detail type
 		switch detail.Type {
@@ -80,7 +84,7 @@ func extractThinkingInfo(details []ReasoningDetail) *ThinkingInfo {
 			}
 		case "reasoning.summary":
 			if detail.Summary != nil && *detail.Summary != "" {
-				text.WriteString(*detail.Summary)
+				appendSummary(*detail.Summary)
 			}
 			// Skip "reasoning.encrypted" - we can't use encrypted data
 		}

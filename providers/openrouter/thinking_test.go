@@ -56,3 +56,20 @@ func TestExtractThinkingInfo_NonEmpty_ReturnsThinking(t *testing.T) {
 		t.Fatal("expected non-empty thinking text, got empty")
 	}
 }
+
+func TestExtractThinkingInfo_ReasoningSummary_InsertsSeparatorBetweenSummaries(t *testing.T) {
+	s1 := "content."
+	s2 := "Evaluating tool usage limits"
+
+	got := extractThinkingInfo([]ReasoningDetail{
+		{Type: "reasoning.summary", Summary: &s1},
+		{Type: "reasoning.summary", Summary: &s2},
+	})
+
+	if got == nil {
+		t.Fatal("expected non-nil thinking info, got nil")
+	}
+	if got.Text != "content.\n\nEvaluating tool usage limits" {
+		t.Fatalf("got.Text = %q, want %q", got.Text, "content.\\n\\nEvaluating tool usage limits")
+	}
+}
