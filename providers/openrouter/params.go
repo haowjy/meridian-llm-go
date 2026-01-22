@@ -192,6 +192,17 @@ func (p *Provider) buildChatCompletionRequest(req *llmprovider.GenerateRequest) 
 		openrouterReq.Stop = params.Stop
 	}
 
+	// System prompt - prepend as system message (OpenAI format)
+	// Unlike Anthropic which has a dedicated `system` field, OpenRouter/OpenAI
+	// requires system prompts as messages with role: "system" prepended to the array
+	if params.System != nil && *params.System != "" {
+		systemMsg := Message{
+			Role:    "system",
+			Content: *params.System,
+		}
+		openrouterReq.Messages = append([]Message{systemMsg}, openrouterReq.Messages...)
+	}
+
 	// Tools
 	if len(params.Tools) > 0 {
 		openrouterTools, err := p.convertToOpenRouterTools(params.Tools)
