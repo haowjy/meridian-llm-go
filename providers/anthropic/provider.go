@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -15,10 +16,11 @@ import (
 
 // Provider implements the llmprovider.Provider interface for Anthropic (Claude) models.
 type Provider struct {
-	client          *anthropic.Client
-	httpClient      *http.Client // Custom HTTP client (nil = SDK default)
-	logger          *slog.Logger
-	debugStreamLogs bool
+	client               *anthropic.Client
+	httpClient           *http.Client  // Custom HTTP client (nil = SDK default)
+	logger               *slog.Logger
+	debugStreamLogs      bool
+	streamingIdleTimeout time.Duration // Idle timeout for streaming (0 = use DefaultStreamingIdleTimeout)
 }
 
 type Option func(*Provider)
@@ -46,6 +48,24 @@ func WithHTTPClient(client *http.Client) Option {
 			p.httpClient = client
 		}
 	}
+}
+
+// WithStreamingIdleTimeout sets the idle timeout for streaming responses.
+// If no data is received for this duration, the stream is considered stalled.
+// Set to 0 to use DefaultStreamingIdleTimeout (2 minutes).
+func WithStreamingIdleTimeout(d time.Duration) Option {
+	return func(p *Provider) {
+		p.streamingIdleTimeout = d
+	}
+}
+
+// getStreamingIdleTimeout returns the configured streaming idle timeout,
+// or DefaultStreamingIdleTimeout if not set.
+func (p *Provider) getStreamingIdleTimeout() time.Duration {
+	if p.streamingIdleTimeout > 0 {
+		return p.streamingIdleTimeout
+	}
+	return DefaultStreamingIdleTimeout
 }
 
 // NewProvider creates a new Anthropic provider with the given API key.

@@ -244,11 +244,14 @@ func (p *Provider) streamChatCompletionsAPI(ctx context.Context, req *llmprovide
 }
 
 // streamEvents reads SSE events and emits library StreamEvents.
-// Uses idle timeout detection: if no data is received for DefaultStreamingIdleTimeout,
+// Uses idle timeout detection: if no data is received for the configured streaming idle timeout,
 // returns ErrStreamingIdleTimeout.
 func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventChan chan<- llmprovider.StreamEvent) error {
 	dbg := streamDebug{enabled: p.debugStreamLogs, logger: p.logger}
 	emitter := llmprovider.NewEventEmitter(eventChan)
+
+	// Get the configured streaming idle timeout (or default)
+	idleTimeout := p.getStreamingIdleTimeout()
 
 	// Close body when context is cancelled to unblock scanner.
 	// scanner.Scan() blocks waiting for data and only checks ctx.Done() after reading.
@@ -292,7 +295,7 @@ func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventCh
 	var generationID string // Generation ID for querying stats after cancel
 
 	// Idle timeout timer - reset on each line received
-	idleTimer := time.NewTimer(DefaultStreamingIdleTimeout)
+	idleTimer := time.NewTimer(idleTimeout)
 	defer idleTimer.Stop()
 
 	// resetIdleTimer safely resets the idle timer
@@ -303,7 +306,7 @@ func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventCh
 			default:
 			}
 		}
-		idleTimer.Reset(DefaultStreamingIdleTimeout)
+		idleTimer.Reset(idleTimeout)
 	}
 
 	for {
@@ -313,11 +316,11 @@ func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventCh
 
 		case <-idleTimer.C:
 			// No data received for too long - provider stalled
-			p.logger.Warn("streaming idle timeout", "timeout", DefaultStreamingIdleTimeout, "model", model)
+			p.logger.Warn("streaming idle timeout", "timeout", idleTimeout, "model", model)
 			return &llmprovider.ProviderError{
 				Code:      llmprovider.ErrorCodeStreamingIdleTimeout,
 				Provider:  llmprovider.ProviderOpenRouter.String(),
-				Message:   fmt.Sprintf("no data received for %v during streaming", DefaultStreamingIdleTimeout),
+				Message:   fmt.Sprintf("no data received for %v during streaming", idleTimeout),
 				Retryable: true,
 				Err:       llmprovider.ErrStreamingIdleTimeout,
 			}
@@ -525,16 +528,16 @@ func (p *Provider) streamEvents(ctx context.Context, body io.ReadCloser, eventCh
 
 			// Guardrail: if tool-call args stop making meaningful progress for too long,
 			// treat this as a stalled stream (even if bytes continue arriving).
-			if stalledAcc := findStalledToolArgs(toolCallsMap, time.Now(), DefaultStreamingIdleTimeout); stalledAcc != nil {
+			if stalledAcc := findStalledToolArgs(toolCallsMap, time.Now(), idleTimeout); stalledAcc != nil {
 				dbg.Warn("openrouter tool call args stalled",
 					"id", stalledAcc.ID,
 					"name", stalledAcc.Name,
-					"timeout", DefaultStreamingIdleTimeout,
+					"timeout", idleTimeout,
 				)
 				return &llmprovider.ProviderError{
 					Code:      llmprovider.ErrorCodeStreamingIdleTimeout,
 					Provider:  llmprovider.ProviderOpenRouter.String(),
-					Message:   fmt.Sprintf("no meaningful tool call args progress for %v during streaming", DefaultStreamingIdleTimeout),
+					Message:   fmt.Sprintf("no meaningful tool call args progress for %v during streaming", idleTimeout),
 					Retryable: true,
 					Err:       llmprovider.ErrStreamingIdleTimeout,
 				}

@@ -33,12 +33,13 @@ import (
 // - 404 errors: Verify model name at https://openrouter.ai/models
 // - Tool calling: Not all models support function calling - check OpenRouter docs
 type Provider struct {
-	apiKey          string
-	httpClient      *http.Client
-	baseURL         string
-	logger          *slog.Logger
-	debugStreamLogs bool
-	useResponsesAPI bool // When true, use Responses API instead of Chat Completions
+	apiKey               string
+	httpClient           *http.Client
+	baseURL              string
+	logger               *slog.Logger
+	debugStreamLogs      bool
+	useResponsesAPI      bool          // When true, use Responses API instead of Chat Completions
+	streamingIdleTimeout time.Duration // Idle timeout for streaming (0 = use DefaultStreamingIdleTimeout)
 }
 
 type Option func(*Provider)
@@ -80,6 +81,24 @@ func WithHTTPClient(client *http.Client) Option {
 			p.httpClient = client
 		}
 	}
+}
+
+// WithStreamingIdleTimeout sets the idle timeout for streaming responses.
+// If no data is received for this duration, the stream is considered stalled.
+// Set to 0 to use DefaultStreamingIdleTimeout (2 minutes).
+func WithStreamingIdleTimeout(d time.Duration) Option {
+	return func(p *Provider) {
+		p.streamingIdleTimeout = d
+	}
+}
+
+// getStreamingIdleTimeout returns the configured streaming idle timeout,
+// or DefaultStreamingIdleTimeout if not set.
+func (p *Provider) getStreamingIdleTimeout() time.Duration {
+	if p.streamingIdleTimeout > 0 {
+		return p.streamingIdleTimeout
+	}
+	return DefaultStreamingIdleTimeout
 }
 
 // NewProvider creates a new OpenRouter provider with the given API key.

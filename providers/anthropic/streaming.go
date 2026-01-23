@@ -70,6 +70,9 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 		// Create debug logger instance
 		dbg := streamDebug{enabled: p.debugStreamLogs, logger: p.logger}
 
+		// Get the configured streaming idle timeout (or default)
+		idleTimeout := p.getStreamingIdleTimeout()
+
 		// Call Anthropic streaming API
 		stream := p.client.Messages.NewStreaming(ctx, apiParams)
 
@@ -100,7 +103,7 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 		}()
 
 		// Idle timeout timer - reset on each event received
-		idleTimer := time.NewTimer(DefaultStreamingIdleTimeout)
+		idleTimer := time.NewTimer(idleTimeout)
 		defer idleTimer.Stop()
 
 		// resetIdleTimer safely resets the idle timer
@@ -111,7 +114,7 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 				default:
 				}
 			}
-			idleTimer.Reset(DefaultStreamingIdleTimeout)
+			idleTimer.Reset(idleTimeout)
 		}
 
 		for {
@@ -122,12 +125,12 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 
 			case <-idleTimer.C:
 				// No data received for too long - provider stalled
-				p.logger.Warn("streaming idle timeout exceeded", "timeout", DefaultStreamingIdleTimeout)
+				p.logger.Warn("streaming idle timeout exceeded", "timeout", idleTimeout)
 				eventChan <- llmprovider.StreamEvent{
 					Error: &llmprovider.ProviderError{
 						Code:      llmprovider.ErrorCodeStreamingIdleTimeout,
 						Provider:  llmprovider.ProviderAnthropic.String(),
-						Message:   fmt.Sprintf("no data received for %v during streaming", DefaultStreamingIdleTimeout),
+						Message:   fmt.Sprintf("no data received for %v during streaming", idleTimeout),
 						Retryable: true,
 						Err:       llmprovider.ErrStreamingIdleTimeout,
 					},
