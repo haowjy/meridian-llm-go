@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -15,6 +16,7 @@ import (
 // Provider implements the llmprovider.Provider interface for Anthropic (Claude) models.
 type Provider struct {
 	client          *anthropic.Client
+	httpClient      *http.Client // Custom HTTP client (nil = SDK default)
 	logger          *slog.Logger
 	debugStreamLogs bool
 }
@@ -35,16 +37,25 @@ func WithDebugStreamLogs(enabled bool) Option {
 	}
 }
 
+// WithHTTPClient sets a custom HTTP client for the provider.
+// Use this to configure timeouts, transport settings, or other HTTP options.
+// For streaming, consider setting Timeout: 0 and using streaming-level idle timeouts.
+func WithHTTPClient(client *http.Client) Option {
+	return func(p *Provider) {
+		if client != nil {
+			p.httpClient = client
+		}
+	}
+}
+
 // NewProvider creates a new Anthropic provider with the given API key.
 func NewProvider(apiKey string, opts ...Option) (*Provider, error) {
 	if apiKey == "" {
 		return nil, llmprovider.ErrInvalidAPIKey
 	}
 
-	client := anthropic.NewClient(option.WithAPIKey(apiKey))
-
+	// Create provider struct first to apply options
 	p := &Provider{
-		client: &client,
 		logger: slog.Default(),
 	}
 	for _, opt := range opts {
@@ -52,6 +63,16 @@ func NewProvider(apiKey string, opts ...Option) (*Provider, error) {
 			opt(p)
 		}
 	}
+
+	// Build client options
+	clientOpts := []option.RequestOption{option.WithAPIKey(apiKey)}
+	if p.httpClient != nil {
+		clientOpts = append(clientOpts, option.WithHTTPClient(p.httpClient))
+	}
+
+	client := anthropic.NewClient(clientOpts...)
+	p.client = &client
+
 	return p, nil
 }
 

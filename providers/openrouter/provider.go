@@ -71,6 +71,17 @@ func WithResponsesAPI(enabled bool) Option {
 	}
 }
 
+// WithHTTPClient sets a custom HTTP client for the provider.
+// Use this to configure timeouts, transport settings, or other HTTP options.
+// For streaming, consider setting Timeout: 0 and using streaming-level idle timeouts.
+func WithHTTPClient(client *http.Client) Option {
+	return func(p *Provider) {
+		if client != nil {
+			p.httpClient = client
+		}
+	}
+}
+
 // NewProvider creates a new OpenRouter provider with the given API key.
 func NewProvider(apiKey string, opts ...Option) (*Provider, error) {
 	if apiKey == "" {
