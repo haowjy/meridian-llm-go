@@ -10,17 +10,18 @@ import (
 // ChatCompletionRequest represents an OpenRouter chat completion request.
 // OpenRouter uses OpenAI-compatible format.
 type ChatCompletionRequest struct {
-	Model       string           `json:"model"`
-	Messages    []Message        `json:"messages"`
-	MaxTokens   *int             `json:"max_tokens,omitempty"`
-	Temperature *float64         `json:"temperature,omitempty"`
-	TopP        *float64         `json:"top_p,omitempty"`
-	TopK        *int             `json:"top_k,omitempty"`
-	Stop        []string         `json:"stop,omitempty"`
-	Stream      bool             `json:"stream"`
-	Tools       []Tool           `json:"tools,omitempty"`
-	ToolChoice  interface{}      `json:"tool_choice,omitempty"` // "auto", "none", "required", or {"type": "function", "function": {"name": "..."}}
-	Reasoning   *ReasoningConfig `json:"reasoning,omitempty"`   // Controls reasoning/thinking tokens
+	Model       string                 `json:"model"`
+	Messages    []Message              `json:"messages"`
+	MaxTokens   *int                   `json:"max_tokens,omitempty"`
+	Temperature *float64               `json:"temperature,omitempty"`
+	TopP        *float64               `json:"top_p,omitempty"`
+	TopK        *int                   `json:"top_k,omitempty"`
+	Stop        []string               `json:"stop,omitempty"`
+	Stream      bool                   `json:"stream"`
+	Tools       []Tool                 `json:"tools,omitempty"`
+	ToolChoice  interface{}            `json:"tool_choice,omitempty"` // "auto", "none", "required", or {"type": "function", "function": {"name": "..."}}
+	Reasoning   *ReasoningConfig       `json:"reasoning,omitempty"`   // Controls reasoning/thinking tokens
+	Provider    *ProviderRoutingConfig `json:"provider,omitempty"`    // Provider routing configuration
 }
 
 // ReasoningConfig controls reasoning tokens for OpenRouter models.
@@ -39,6 +40,16 @@ type ReasoningConfig struct {
 
 	// Enabled can be used to enable reasoning with default params
 	Enabled *bool `json:"enabled,omitempty"`
+}
+
+// ProviderRoutingConfig controls which providers serve the request (OpenRouter).
+// See: https://openrouter.ai/docs/guides/routing/provider-selection
+type ProviderRoutingConfig struct {
+	Order          []string `json:"order,omitempty"`
+	Only           []string `json:"only,omitempty"`
+	Ignore         []string `json:"ignore,omitempty"`
+	AllowFallbacks *bool    `json:"allow_fallbacks,omitempty"`
+	Sort           *string  `json:"sort,omitempty"`
 }
 
 // Message represents a message in the conversation.
@@ -236,6 +247,18 @@ func (p *Provider) buildChatCompletionRequest(req *llmprovider.GenerateRequest) 
 			openrouterReq.Reasoning = &ReasoningConfig{
 				Effort: "none",
 			}
+		}
+	}
+
+	// Provider routing - build provider object if any routing fields are set
+	// See: https://openrouter.ai/docs/guides/routing/provider-selection
+	if len(params.ProviderOrder) > 0 || len(params.ProviderOnly) > 0 || len(params.ProviderIgnore) > 0 || params.AllowFallbacks != nil || params.ProviderSort != nil {
+		openrouterReq.Provider = &ProviderRoutingConfig{
+			Order:          params.ProviderOrder,
+			Only:           params.ProviderOnly,
+			Ignore:         params.ProviderIgnore,
+			AllowFallbacks: params.AllowFallbacks,
+			Sort:           params.ProviderSort,
 		}
 	}
 

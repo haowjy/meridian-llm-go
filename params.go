@@ -98,12 +98,12 @@ type RequestParams struct {
 
 	// ===== Provider Routing (OpenRouter) =====
 
-	// Provider specifies which provider to use (OpenRouter)
-	// Format: "anthropic/claude-haiku-4-5", "openai/gpt-4", etc.
-	Provider *string `json:"provider,omitempty"`
-
-	// FallbackModels lists alternative models if primary fails
-	FallbackModels []string `json:"fallback_models,omitempty"`
+	// Provider routing controls which providers serve the request (OpenRouter)
+	ProviderOrder  []string `json:"provider_order,omitempty"`
+	ProviderOnly   []string `json:"provider_only,omitempty"`
+	ProviderIgnore []string `json:"provider_ignore,omitempty"`
+	AllowFallbacks *bool    `json:"allow_fallbacks,omitempty"`
+	ProviderSort   *string  `json:"provider_sort,omitempty"`
 }
 
 // ResponseFormat specifies the format for structured outputs
