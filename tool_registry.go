@@ -41,7 +41,7 @@ func (r *ToolRegistry) registerBuiltInTools() {
 	// Register search tool
 	_ = r.Register(ToolDefinition{
 		Name:        ToolTypeSearch,
-		Description: "Web search tool (server-executed)",
+		Description: "Web search tool (provider-executed)",
 		Factory:     NewSearchTool,
 	})
 

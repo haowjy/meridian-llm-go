@@ -262,7 +262,7 @@ func (p *Provider) emitAnthropicStreamEvents(event anthropic.MessageStreamEventU
 			}
 
 		case "server_tool_use":
-			// Server-side tools (web_search) arrive complete in ContentBlockStart
+			// Provider-side tools (web_search) arrive complete in ContentBlockStart
 			// No input_json_delta events will follow - input is complete on arrival
 			if e.ContentBlock.ID != "" && e.ContentBlock.Name != "" {
 				emitter.ToolCallStart(e.ContentBlock.ID, e.ContentBlock.Name, &messageID)

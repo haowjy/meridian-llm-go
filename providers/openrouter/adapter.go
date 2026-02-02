@@ -662,8 +662,8 @@ func (p *Provider) convertToolCallToBlock(toolCall ToolCall, sequence int) (*llm
 		"input":       input,
 	}
 
-	// All OpenRouter tools are backend-side (executed by our backend)
-	executionSide := llmprovider.ExecutionSideServer
+	// All OpenRouter tools are locally-executed (executed by our backend, not the provider)
+	executionSide := llmprovider.ExecutionSideLocal
 
 	return &llmprovider.Block{
 		BlockType:     llmprovider.BlockTypeToolUse,

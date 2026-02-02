@@ -221,10 +221,10 @@ func TestConvertToAnthropicMessages_CrossProviderServerTool(t *testing.T) {
 	}
 }
 
-func TestConvertToAnthropicMessages_SameProviderServerTool(t *testing.T) {
-	// Server-side tool from Anthropic should be skipped during replay
+func TestConvertToAnthropicMessages_SameProviderProviderTool(t *testing.T) {
+	// Provider-side tool from Anthropic should be skipped during replay
 	anthropicProvider := llmprovider.ProviderAnthropic.String()
-	executionSide := llmprovider.ExecutionSideServer
+	executionSide := llmprovider.ExecutionSideLocal
 	searchText := "I searched the web and found these sources:\n1. [Example](http://example.com)"
 
 	messages := []llmprovider.Message{

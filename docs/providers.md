@@ -27,7 +27,7 @@ Supported LLM providers and their notable features.
 
 **Features:**
 - Extended thinking (with signature verification)
-- Server-side web search (`web_search_20250305`)
+- Provider-side web search (`web_search_20250305`)
 - Client-side bash execution (`BashTool20250124`)
 - Client-side text editor (`TextEditor20250728`)
 - Vision support (images up to 1568px)
@@ -71,7 +71,7 @@ resp, err := provider.GenerateResponse(ctx, req)
 - `gpt-4o-search-preview` (model-based search)
 
 **Features (planned):**
-- Code interpreter (Python execution, server-side)
+- Code interpreter (Python execution, provider-side)
 - Model-based search (specific models only)
 - Vision support
 - Streaming with SSE
@@ -94,9 +94,9 @@ resp, err := provider.GenerateResponse(ctx, req)
 - `gemini-2.5-flash`
 
 **Features (planned):**
-- Google Search (server-side, grounding support)
-- URL context (fetch and parse web pages, server-side)
-- Code execution (Python, server-side, 65+ libraries)
+- Google Search (provider-side, grounding support)
+- URL context (fetch and parse web pages, provider-side)
+- Code execution (Python, provider-side, 65+ libraries)
 - Vision support
 - Streaming
 - Grounding with citations
@@ -222,7 +222,7 @@ resp, _ := newProvider.GenerateResponse(ctx, &llm.GenerateRequest{
 
 ### Non-Portable Blocks
 
-Server-side tool results are NOT portable:
+Provider-side tool results are NOT portable:
 
 ```go
 // Check for provider-specific blocks
@@ -238,7 +238,7 @@ for _, block := range blocks {
 
 Examples of non-portable blocks:
 - `web_search_result` (encrypted citations)
-- `code_exec_result` (server-side execution state)
+- `code_exec_result` (provider-side execution state)
 
 ---
 

@@ -36,7 +36,7 @@ func NewMalformedToolRecovery(
 	sequence int,
 	provider *string,
 ) (*MalformedToolRecovery, int) {
-	serverSide := ExecutionSideServer
+	localSide := ExecutionSideLocal
 
 	// Truncate raw input to avoid bloating the context
 	const maxInputLen = 500
@@ -51,7 +51,7 @@ func NewMalformedToolRecovery(
 			// Store malformed input under special key so it's clear this isn't valid input
 			"input": map[string]interface{}{"_malformed": truncatedInput},
 		},
-		ExecutionSide: &serverSide,
+		ExecutionSide: &localSide,
 		Provider:      provider,
 	}
 

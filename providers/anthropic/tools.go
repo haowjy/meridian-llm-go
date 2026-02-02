@@ -49,7 +49,7 @@ func (p *Provider) convertToolsToAnthropicTools(tools []llmprovider.Tool) ([]ant
 }
 
 // convertSearchTool converts search tool to Anthropic web_search format.
-// Anthropic search is server-side executed.
+// Anthropic search is provider-executed.
 func (p *Provider) convertSearchTool(tool *llmprovider.Tool) (anthropic.ToolUnionParam, error) {
 	// Validate tool name (OpenAI format uses tool.Function.Name)
 	if tool.Function.Name != "search" {

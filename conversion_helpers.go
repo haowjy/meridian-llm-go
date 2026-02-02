@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// SplitMessagesAtCrossProviderTool handles server-side tool blocks from other providers
+// SplitMessagesAtCrossProviderTool handles provider-side tool blocks from other providers
 // by converting them into a normalized custom tool pattern that works across all providers.
 //
 // This is provider-agnostic shared logic used by all adapters during message conversion.
@@ -29,11 +29,11 @@ func SplitMessagesAtCrossProviderTool(messages []Message, currentProvider Provid
 			continue
 		}
 
-		// Scan for cross-provider server tools in assistant message
+		// Scan for cross-provider provider-side tools in assistant message
 		needsSplit := false
 		for _, block := range msg.Blocks {
 			if block.IsToolUseBlock() &&
-				block.IsServerSideTool() &&
+				block.IsProviderSideTool() &&
 				block.IsFromDifferentProvider(currentProvider) {
 				needsSplit = true
 				break
@@ -45,15 +45,15 @@ func SplitMessagesAtCrossProviderTool(messages []Message, currentProvider Provid
 			continue
 		}
 
-		// Split assistant message at each cross-provider server tool
+		// Split assistant message at each cross-provider provider-side tool
 		currentBlocks := []*Block{}
 
 		for i := 0; i < len(msg.Blocks); i++ {
 			block := msg.Blocks[i]
 
-			// Check if this is a cross-provider server tool
+			// Check if this is a cross-provider provider-side tool
 			if block.IsToolUseBlock() &&
-				block.IsServerSideTool() &&
+				block.IsProviderSideTool() &&
 				block.IsFromDifferentProvider(currentProvider) {
 
 				// Close current assistant message (if any blocks accumulated)

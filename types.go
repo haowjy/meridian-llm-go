@@ -10,8 +10,8 @@ const (
 	BlockTypeToolResult      = "tool_result"      // Result sent back from client-executed tool call
 	BlockTypeImage           = "image"
 	BlockTypeDocument        = "document"          // Provider file uploads (Anthropic/Gemini)
-	BlockTypeWebSearch       = "web_search_use"    // Server-executed web search invocation (LLM request)
-	BlockTypeWebSearchResult = "web_search_result" // Server-executed web search result (provider response)
+	BlockTypeWebSearch       = "web_search_use"    // Provider-executed web search invocation (LLM request)
+	BlockTypeWebSearchResult = "web_search_result" // Provider-executed web search result (provider response)
 )
 
 // Citation represents a reference from text content to external sources.
@@ -83,8 +83,8 @@ type Block struct {
 	Content map[string]interface{} `json:"content,omitempty"`
 
 	// ExecutionSide indicates where tool execution happens (for tool_use blocks)
-	// Values: ExecutionSideProvider (LLM provider), ExecutionSideServer (our backend), ExecutionSideClient (frontend)
-	// Defaults to ExecutionSideServer (backend) if empty
+	// Values: ExecutionSideProvider (LLM provider), ExecutionSideLocal (non-provider)
+	// Defaults to ExecutionSideLocal if empty
 	// Only relevant for tool_use blocks
 	ExecutionSide *ExecutionSide `json:"execution_side,omitempty"`
 
@@ -166,21 +166,11 @@ func (b *Block) IsProviderSideTool() bool {
 	return b.GetExecutionSide() == ExecutionSideProvider
 }
 
-// IsBackendSideTool returns true if this tool is executed by our backend (e.g., Tavily, bash, custom tools)
-// Treats empty ExecutionSide as backend-side (default)
-func (b *Block) IsBackendSideTool() bool {
+// IsLocalTool returns true if this tool requires non-provider execution (stop/execute/resume cycle)
+// Treats empty ExecutionSide as local (default)
+func (b *Block) IsLocalTool() bool {
 	side := b.GetExecutionSide()
-	return side == ExecutionSideServer || side == ""
-}
-
-// IsClientSideTool returns true if this tool is executed client-side (frontend)
-func (b *Block) IsClientSideTool() bool {
-	return b.GetExecutionSide() == ExecutionSideClient
-}
-
-// Deprecated: Use IsProviderSideTool instead
-func (b *Block) IsServerSideTool() bool {
-	return b.IsProviderSideTool()
+	return side == ExecutionSideLocal || side == ""
 }
 
 // GetToolUseID returns the tool_use_id from a tool_use or tool_result block
@@ -227,16 +217,16 @@ func (b *Block) HasProviderData() bool {
 
 // CanReplayToProvider returns true if this block can be safely replayed to the given provider.
 // Provider-side tool blocks can only be replayed to their original provider.
-// Backend-side and client-side tools are replayable across providers.
+// Local tools (backend/client executed) are replayable across providers.
 func (b *Block) CanReplayToProvider(targetProvider ProviderID) bool {
 	// Non-tool blocks are always replayable
 	if b.BlockType != BlockTypeToolUse {
 		return true
 	}
 
-	// Backend-side and client-side tools are replayable across providers
+	// Local tools are replayable across providers
 	side := b.GetExecutionSide()
-	if side == ExecutionSideServer || side == ExecutionSideClient || side == "" {
+	if side == ExecutionSideLocal || side == "" {
 		return true
 	}
 

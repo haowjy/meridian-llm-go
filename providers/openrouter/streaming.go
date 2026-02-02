@@ -643,8 +643,8 @@ finalize:
 			"input":       input,
 		}
 
-		// All OpenRouter tools are backend-side (executed by our backend)
-		executionSide := llmprovider.ExecutionSideServer
+		// All OpenRouter tools are locally-executed (executed by our backend, not the provider)
+		executionSide := llmprovider.ExecutionSideLocal
 
 		// AG-UI: ToolCallEnd + Block
 		emitter.ToolCallEnd(acc.ID)

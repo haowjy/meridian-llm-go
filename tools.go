@@ -28,8 +28,7 @@ type ExecutionSide string
 
 const (
 	ExecutionSideProvider ExecutionSide = "provider" // LLM provider executes (e.g., Anthropic's built-in web_search)
-	ExecutionSideServer   ExecutionSide = "server"   // Our backend executes (e.g., Tavily web search, bash, custom tools)
-	ExecutionSideClient   ExecutionSide = "client"   // Frontend executes (future use, rarely used)
+	ExecutionSideLocal    ExecutionSide = "local"    // Non-provider execution (e.g., backend/client handles stop/execute/resume)
 )
 
 // ToolChoiceMode controls tool selection behavior
@@ -58,7 +57,7 @@ type FunctionDetails struct {
 type Tool struct {
 	Type          string           `json:"type"`     // Always "function" for function tools
 	Function      FunctionDetails  `json:"function"` // Function definition
-	ExecutionSide ExecutionSide    `json:"-"`        // Where tool is executed (not sent to API), defaults to Server (backend)
+	ExecutionSide ExecutionSide    `json:"-"`        // Where tool is executed (not sent to API), defaults to Local (non-provider)
 }
 
 // Validate checks if the Tool is properly configured

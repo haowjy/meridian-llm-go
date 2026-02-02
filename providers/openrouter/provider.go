@@ -136,7 +136,7 @@ func (p *Provider) SupportsModel(model string) bool {
 
 // validateWebSearchRequirements blocks provider-side web_search tool usage with OpenRouter.
 // OpenRouter's built-in search requires :online suffix and is low quality.
-// Backend-executed web_search (e.g., Tavily) is allowed via ExecutionSide=Server.
+// Locally-executed web_search (e.g., Tavily) is allowed via ExecutionSide=Local.
 func (p *Provider) validateWebSearchRequirements(req *llmprovider.GenerateRequest) error {
 	// Check if request includes web_search tool
 	if req.Params == nil || len(req.Params.Tools) == 0 {
@@ -146,16 +146,16 @@ func (p *Provider) validateWebSearchRequirements(req *llmprovider.GenerateReques
 	for _, tool := range req.Params.Tools {
 		if tool.Function.Name == "search" || tool.Function.Name == "web_search" {
 			// Only block provider-side web_search (OpenRouter's built-in)
-			// Allow backend-side web_search (Tavily, ExecutionSide=Server or empty)
+			// Allow locally-executed web_search (Tavily, ExecutionSide=Local or empty)
 			if tool.ExecutionSide == llmprovider.ExecutionSideProvider {
 				return &llmprovider.ModelError{
 					Model:    req.Model,
 					Provider: p.Name().String(),
-					Reason:   "OpenRouter's built-in web_search requires :online suffix and is low quality. Use backend-executed web search (Tavily) instead.",
+					Reason:   "OpenRouter's built-in web_search requires :online suffix and is low quality. Use locally-executed web search (Tavily) instead.",
 					Err:      llmprovider.ErrInvalidModel,
 				}
 			}
-			// ExecutionSideServer or empty (defaults to Server) = backend-executed (Tavily) = ALLOWED
+			// ExecutionSideLocal or empty = locally-executed (Tavily) = ALLOWED
 		}
 	}
 

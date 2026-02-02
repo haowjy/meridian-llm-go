@@ -20,7 +20,7 @@ type Block struct {
     Sequence      int                    // Position in message (0-indexed)
     TextContent   *string                // Text for text/thinking blocks
     Content       map[string]interface{} // Type-specific structured data
-    ExecutionSide *ExecutionSide         // For tool_use: "server" or "client"
+    ExecutionSide *ExecutionSide         // For tool_use: "provider" or "local"
     Provider      *string                // Provider that created this block
     ProviderData  json.RawMessage        // Raw provider response (if lossy conversion)
     Citations     []Citation             // References to external sources
@@ -45,8 +45,8 @@ type Block struct {
 | `text` | Required | null | Assistant's text response |
 | `thinking` | Required | Signature (optional) | Extended thinking/reasoning |
 | `tool_use` | null | Tool metadata | Function call |
-| `web_search_use` | null | Search metadata | Server-executed web search request |
-| `web_search_result` | null | Results or error | Server-executed web search response |
+| `web_search_use` | null | Search metadata | Provider-executed web search request |
+| `web_search_result` | null | Results or error | Provider-executed web search response |
 
 ## Block Type Details
 
@@ -80,7 +80,7 @@ block := &llm.Block{
 
 ### tool_use
 
-Client-side or server-side tool call:
+Client-side or provider-side tool call:
 
 ```go
 block := &llm.Block{
@@ -94,7 +94,7 @@ block := &llm.Block{
             "unit":     "celsius",
         },
     },
-    ExecutionSide: ptr(llm.ExecutionSideClient), // Client executes
+    ExecutionSide: ptr(llm.ExecutionSideLocal), // Non-provider execution (stop/execute/resume)
 }
 ```
 
@@ -132,7 +132,7 @@ TextContent: ptr("Error: API key invalid"),
 
 ### web_search_use
 
-Server-executed web search request (LLM → provider):
+Provider-executed web search request (LLM → provider):
 
 ```go
 block := &llm.Block{
@@ -145,13 +145,13 @@ block := &llm.Block{
             "query": "public domain short poems",
         },
     },
-    ExecutionSide: ptr(llm.ExecutionSideServer), // Provider executes
+    ExecutionSide: ptr(llm.ExecutionSideProvider), // Provider executes
 }
 ```
 
 ### web_search_result
 
-Server-executed web search response (provider → LLM):
+Provider-executed web search response (provider → LLM):
 
 Success:
 ```go
@@ -294,8 +294,8 @@ isToolUse := block.IsToolUseBlock()      // Specifically tool_use
 isToolResult := block.IsToolResultBlock() // Specifically tool_result
 
 // Check execution side
-isServerSide := block.IsServerSideTool()  // Provider executes
-isClientSide := block.IsClientSideTool()  // You execute
+isProviderSide := block.IsProviderSideTool()  // Provider executes
+isLocal := block.IsLocalTool()                // Non-provider execution (stop/execute/resume)
 ```
 
 ## Creating Blocks
@@ -354,8 +354,7 @@ const (
 
 const (
     ExecutionSideProvider = "provider" // LLM provider executes (e.g., Anthropic's web_search)
-    ExecutionSideServer   = "server"   // Our backend executes (e.g., custom tools)
-    ExecutionSideClient   = "client"   // Frontend executes
+    ExecutionSideLocal    = "local"    // Non-provider execution (stop/execute/resume cycle)
 )
 
 const (

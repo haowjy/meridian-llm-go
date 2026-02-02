@@ -45,9 +45,9 @@ func sameProviderToolBlock(toolName string, currentProvider string, seq int) *Bl
 	}
 }
 
-// Helper to create a backend-side tool_use block (replayable across providers)
-func backendToolBlock(toolName string, seq int) *Block {
-	side := ExecutionSideServer
+// Helper to create a local tool_use block (replayable across providers)
+func localToolBlock(toolName string, seq int) *Block {
+	side := ExecutionSideLocal
 	return &Block{
 		BlockType:     BlockTypeToolUse,
 		Sequence:      seq,
@@ -85,7 +85,7 @@ func TestSplitMessagesAtCrossProviderTool(t *testing.T) {
 				Role: "assistant",
 				Blocks: []*Block{
 					textBlock("Here's my response", 0),
-					backendToolBlock("bash", 1), // Backend tool, not provider-side
+					localToolBlock("bash", 1), // Local tool, not provider-side
 				},
 			},
 		}
@@ -341,7 +341,7 @@ func TestFindToolResultBlocks(t *testing.T) {
 	t.Run("returns empty when no text block follows", func(t *testing.T) {
 		blocks := []*Block{
 			crossProviderToolBlock("web_search", "anthropic", 0),
-			backendToolBlock("bash", 1), // Not a text block
+			localToolBlock("bash", 1), // Not a text block
 		}
 
 		results, consumed := FindToolResultBlocks(blocks, 0)

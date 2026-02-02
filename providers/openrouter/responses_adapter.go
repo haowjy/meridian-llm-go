@@ -341,7 +341,7 @@ func (p *Provider) convertFromResponsesResponse(resp *ResponseObject) (*llmprovi
 				"input":       input,
 			}
 
-			executionSide := llmprovider.ExecutionSideServer
+			executionSide := llmprovider.ExecutionSideLocal
 			blocks = append(blocks, &llmprovider.Block{
 				BlockType:     llmprovider.BlockTypeToolUse,
 				Sequence:      sequence,

@@ -427,7 +427,7 @@ func (p *Provider) handleResponsesEvent(
 					"tool_name":   acc.Name,
 					"input":       input,
 				}
-				executionSide := llmprovider.ExecutionSideServer
+				executionSide := llmprovider.ExecutionSideLocal
 
 				// Emit ToolCallEnd and Block
 				emitter.ToolCallEnd(callID)
@@ -554,7 +554,7 @@ func (p *Provider) finalizeResponsesStream(
 			"tool_name":   acc.Name,
 			"input":       input,
 		}
-		executionSide := llmprovider.ExecutionSideServer
+		executionSide := llmprovider.ExecutionSideLocal
 
 		emitter.ToolCallEnd(callID)
 		emitter.Block(&llmprovider.Block{

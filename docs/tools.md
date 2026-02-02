@@ -81,11 +81,11 @@ searchTool, err := llm.NewSearchTool()
 ```
 
 Provider mapping:
-- **Anthropic**: `web_search_20250305` (server-side, encrypted results)
-- **Gemini**: `google_search` (server-side)
+- **Anthropic**: `web_search_20250305` (provider-side, encrypted results)
+- **Gemini**: `google_search` (provider-side)
 - **OpenAI**: Model-based search (only certain models)
 
-**Execution:** Server-side (provider executes)
+**Execution:** Provider-side
 
 **Portability:** ❌ Results are provider-specific and not portable
 
@@ -180,7 +180,7 @@ schema.AddProperty("content", llm.PropertySchema{...}, -1)  // Second
 
 ## Tool Execution
 
-### Server-Side Tools (web_search)
+### Provider-Side Tools (web_search)
 
 Provider executes, returns results automatically:
 
@@ -291,7 +291,7 @@ ToolChoice: &llm.ToolChoice{
 
 ### Non-Portable Tools (❌)
 
-**Server-side built-in tools:**
+**Provider-side built-in tools:**
 ```go
 []*llm.Tool{llm.NewSearchTool()}
 ```

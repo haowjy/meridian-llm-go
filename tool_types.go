@@ -37,7 +37,7 @@ func NewSearchTool() (*Tool, error) {
 }
 
 // NewTextEditorTool creates a text editor tool (OpenAI format).
-// This is a backend-side tool for editing files (executed by our backend).
+// This is a locally-executed tool for editing files (executed by backend/client).
 func NewTextEditorTool() (*Tool, error) {
 	schema := NewToolInputSchema()
 	schema.AddProperty("path", PropertySchema{
@@ -55,10 +55,10 @@ func NewTextEditorTool() (*Tool, error) {
 		Type: "function",
 		Function: FunctionDetails{
 			Name:        "text_editor",
-			Description: "Edit text files (backend execution)",
+			Description: "Edit text files (local execution)",
 			Parameters:  schema,
 		},
-		ExecutionSide: ExecutionSideServer, // Backend executes
+		ExecutionSide: ExecutionSideLocal, // Local execution (stop/execute/resume)
 	}
 
 	if err := tool.Validate(); err != nil {
@@ -70,7 +70,7 @@ func NewTextEditorTool() (*Tool, error) {
 }
 
 // NewBashTool creates a bash command execution tool (OpenAI format).
-// This is a backend-side tool for executing shell commands (executed by our backend).
+// This is a locally-executed tool for executing shell commands (executed by backend/client).
 func NewBashTool() (*Tool, error) {
 	schema := NewToolInputSchema()
 	schema.AddProperty("command", PropertySchema{
@@ -83,10 +83,10 @@ func NewBashTool() (*Tool, error) {
 		Type: "function",
 		Function: FunctionDetails{
 			Name:        "bash",
-			Description: "Execute bash commands (backend execution)",
+			Description: "Execute bash commands (local execution)",
 			Parameters:  schema,
 		},
-		ExecutionSide: ExecutionSideServer, // Backend executes
+		ExecutionSide: ExecutionSideLocal, // Local execution (stop/execute/resume)
 	}
 
 	if err := tool.Validate(); err != nil {
@@ -97,9 +97,9 @@ func NewBashTool() (*Tool, error) {
 	return tool, nil
 }
 
-// NewCustomTool creates a custom function tool (OpenAI format) with default backend execution.
+// NewCustomTool creates a custom function tool (OpenAI format) with default local execution.
 // This follows the universal function calling standard used by OpenAI, Anthropic, Gemini, and OpenRouter.
-// ExecutionSide defaults to Server (backend execution).
+// ExecutionSide defaults to Local (non-provider execution).
 //
 // Parameters:
 //   - name: Function name (required)
@@ -120,7 +120,7 @@ func NewBashTool() (*Tool, error) {
 //	schema.AddRequired("location")
 //	tool, err := NewCustomTool("get_weather", "Get the weather", schema)
 func NewCustomTool(name string, description string, schema ToolInputSchema) (*Tool, error) {
-	return NewCustomToolWithSide(name, description, schema, ExecutionSideServer)
+	return NewCustomToolWithSide(name, description, schema, ExecutionSideLocal)
 }
 
 // NewCustomToolWithSide creates a custom function tool with explicit execution side.

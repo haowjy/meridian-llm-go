@@ -593,12 +593,12 @@ func (p *Provider) convertAnthropicBlock(content anthropic.ContentBlockUnion, se
 		contentMap["input"] = content.Input
 
 		// Determine execution side by checking original tool definition
-		// Default to server-side execution
-		executionSide := llmprovider.ExecutionSideServer
+		// Default to local execution (non-provider)
+		executionSide := llmprovider.ExecutionSideLocal
 		toolName := content.Name
 
 		// Check if we sent this tool in the request - use its ExecutionSide
-		// This allows the same tool name ("web_search") to support both backend
+		// This allows the same tool name ("web_search") to support both local
 		// (Tavily) and provider (Anthropic built-in) execution modes
 		for _, tool := range tools {
 			if tool.Function.Name == toolName {
@@ -622,7 +622,7 @@ func (p *Provider) convertAnthropicBlock(content anthropic.ContentBlockUnion, se
 		// Handle known provider-specific types by extracting essential fields
 		switch content.Type {
 		case "server_tool_use":
-			// Server-side tool use (e.g., web_search executed by Anthropic)
+			// Provider-side tool use (e.g., web_search executed by Anthropic)
 			// Build sparse JSON manually (SDK's RawJSON() includes inflated struct with zero-value fields)
 			providerDataMap := map[string]interface{}{
 				"type":  content.Type,
@@ -662,7 +662,7 @@ func (p *Provider) convertAnthropicBlock(content anthropic.ContentBlockUnion, se
 			}, nil
 
 		case "web_search_tool_result":
-			// Web search tool result from Anthropic (server-executed search)
+			// Web search tool result from Anthropic (provider-executed search)
 			// Normalized to web_search_result block type (not tool_result - this is not a client tool)
 			// Can be either success (results array) or error
 			contentMap := make(map[string]interface{})
@@ -748,7 +748,7 @@ func (p *Provider) convertAnthropicBlock(content anthropic.ContentBlockUnion, se
 			}
 
 			return &llmprovider.Block{
-				BlockType:    llmprovider.BlockTypeWebSearchResult, // Server-executed search result, not client tool
+				BlockType:    llmprovider.BlockTypeWebSearchResult, // Provider-executed search result, not client tool
 				Sequence:     sequence,
 				Content:      contentMap,
 				Provider:     provider,
