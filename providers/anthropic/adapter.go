@@ -554,35 +554,33 @@ func (p *Provider) convertAnthropicBlock(content anthropic.ContentBlockUnion, se
 		thinking := content.Thinking
 		signature := content.Signature
 
-		// Thinking blocks without signatures cannot be verified as extended thinking
-		// Convert to regular text blocks (unverifiable thinking = regular text)
-		if signature == "" {
-			return &llmprovider.Block{
-				BlockType:   llmprovider.BlockTypeText,
-				Sequence:    sequence,
-				TextContent: &thinking,
-				Provider:    provider,
-			}, nil
-		}
-
-		// Signature is provider-specific metadata (cryptographic verification)
-		// Store in ProviderData, not Content (Content is for semantic data only)
-		providerDataMap := map[string]interface{}{
-			"signature": signature,
-		}
-		providerData, err := json.Marshal(providerDataMap)
-		if err != nil {
-			p.logger.Error("failed to marshal thinking signature", "error", err)
-			return nil, fmt.Errorf("marshal thinking signature: %w", err)
+		// Always preserve BlockTypeThinking regardless of signature.
+		// Signatures are provider-specific metadata for Anthropic API replay,
+		// not a type discriminator. During streaming, AG-UI events emit
+		// ThinkingStart/End for ALL thinking blocks — persistence must match.
+		//
+		// For replay without signature, convertToAnthropicMessages wraps
+		// content in <thinking> tags (cross-provider fallback, line ~185).
+		var providerData json.RawMessage
+		if signature != "" {
+			providerDataMap := map[string]interface{}{
+				"signature": signature,
+			}
+			var err error
+			providerData, err = json.Marshal(providerDataMap)
+			if err != nil {
+				p.logger.Error("failed to marshal thinking signature", "error", err)
+				return nil, fmt.Errorf("marshal thinking signature: %w", err)
+			}
 		}
 
 		return &llmprovider.Block{
 			BlockType:    llmprovider.BlockTypeThinking,
 			Sequence:     sequence,
 			TextContent:  &thinking,
-			Content:      nil, // No semantic content for thinking blocks
+			Content:      nil,
 			Provider:     provider,
-			ProviderData: providerData, // Signature stored as provider-specific metadata
+			ProviderData: providerData, // nil if no signature
 		}, nil
 
 	case "tool_use":

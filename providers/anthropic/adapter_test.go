@@ -1,9 +1,11 @@
 package anthropic
 
 import (
+	"encoding/json"
 	"log/slog"
 	"testing"
 
+	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/haowjy/meridian-llm-go"
 )
 
@@ -433,6 +435,64 @@ func TestConvertToAnthropicMessages_ThinkingBlock_WithoutSignature(t *testing.T)
 	// Verify it's a text block (not a thinking block)
 	// Note: We can't easily inspect the SDK type here, but the conversion should succeed
 	// without a 400 error, which is the main goal
+}
+
+func TestConvertAnthropicBlock_ThinkingWithSignature(t *testing.T) {
+	// Thinking block with signature should be BlockTypeThinking with ProviderData
+	block := anthropic.ContentBlockUnion{
+		Type:      "thinking",
+		Thinking:  "Let me analyze step by step...",
+		Signature: "4k_abc123",
+	}
+
+	result, err := testProvider().convertAnthropicBlock(block, 0, nil)
+	if err != nil {
+		t.Fatalf("convertAnthropicBlock() error = %v", err)
+	}
+
+	if result.BlockType != llmprovider.BlockTypeThinking {
+		t.Errorf("expected BlockTypeThinking, got %s", result.BlockType)
+	}
+	if result.TextContent == nil || *result.TextContent != "Let me analyze step by step..." {
+		t.Errorf("unexpected TextContent: %v", result.TextContent)
+	}
+	if result.ProviderData == nil {
+		t.Fatal("expected ProviderData with signature, got nil")
+	}
+
+	var pd map[string]interface{}
+	if err := json.Unmarshal(result.ProviderData, &pd); err != nil {
+		t.Fatalf("failed to unmarshal ProviderData: %v", err)
+	}
+	if pd["signature"] != "4k_abc123" {
+		t.Errorf("expected signature '4k_abc123', got %v", pd["signature"])
+	}
+}
+
+func TestConvertAnthropicBlock_ThinkingWithoutSignature(t *testing.T) {
+	// Thinking block WITHOUT signature should still be BlockTypeThinking (not text).
+	// This ensures persistence matches streaming (AG-UI emits ThinkingStart/End
+	// for all thinking blocks), so groupThinkingAndTools() works after refreshTurn.
+	block := anthropic.ContentBlockUnion{
+		Type:     "thinking",
+		Thinking: "Let me think about this...",
+		// No Signature field — empty string
+	}
+
+	result, err := testProvider().convertAnthropicBlock(block, 0, nil)
+	if err != nil {
+		t.Fatalf("convertAnthropicBlock() error = %v", err)
+	}
+
+	if result.BlockType != llmprovider.BlockTypeThinking {
+		t.Errorf("expected BlockTypeThinking, got %s (thinking blocks must retain type regardless of signature)", result.BlockType)
+	}
+	if result.TextContent == nil || *result.TextContent != "Let me think about this..." {
+		t.Errorf("unexpected TextContent: %v", result.TextContent)
+	}
+	if result.ProviderData != nil {
+		t.Errorf("expected nil ProviderData for signatureless thinking, got %s", string(result.ProviderData))
+	}
 }
 
 // Helper function to create string pointers
