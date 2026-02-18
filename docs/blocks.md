@@ -132,7 +132,7 @@ TextContent: ptr("Error: API key invalid"),
 
 ### web_search_use
 
-Provider-executed web search request (LLM → provider):
+Provider-executed web search request (LLM -> provider):
 
 ```go
 block := &llm.Block{
@@ -151,7 +151,7 @@ block := &llm.Block{
 
 ### web_search_result
 
-Provider-executed web search response (provider → LLM):
+Provider-executed web search response (provider -> LLM):
 
 Success:
 ```go

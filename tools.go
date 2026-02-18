@@ -52,8 +52,8 @@ type FunctionDetails struct {
 // Tool represents a function tool (OpenAI universal format).
 // This format is the industry standard and cleanly converts to all providers:
 //   - OpenAI: Use directly (native format)
-//   - Anthropic: Flatten and rename (parameters → input_schema)
-//   - Gemini: Flatten and rename (parameters → parameters_json_schema)
+//   - Anthropic: Flatten and rename (parameters -> input_schema)
+//   - Gemini: Flatten and rename (parameters -> parameters_json_schema)
 type Tool struct {
 	Type          string           `json:"type"`     // Always "function" for function tools
 	Function      FunctionDetails  `json:"function"` // Function definition
@@ -144,9 +144,9 @@ func NewSpecificToolChoice(toolName string) (*ToolChoice, error) {
 // Supports multiple aliases for convenience.
 //
 // Supported names:
-//   - "web_search", "search" → Search tool
-//   - "text_editor", "file_edit" → Text editor tool
-//   - "bash", "code_exec" → Bash tool
+//   - "web_search", "search" -> Search tool
+//   - "text_editor", "file_edit" -> Text editor tool
+//   - "bash", "code_exec" -> Bash tool
 //
 // Returns error if the name doesn't match any built-in tool.
 func MapToolByName(name string) (*Tool, error) {

@@ -139,7 +139,7 @@ func determineTransition(state BlockState, parsed *ParsedDelta) BlockTransition 
 		NewIndex: state.CurrentIndex,
 	}
 
-	// Thinking → Text transition
+	// Thinking -> Text transition
 	// (had reasoning before, now have text without reasoning)
 	if state.CurrentType == "thinking" && parsed.Text != nil && parsed.Thinking == nil {
 		transition.ClosePrevious = true

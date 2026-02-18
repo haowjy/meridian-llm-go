@@ -18,20 +18,20 @@ make run-openrouter-streaming # OpenRouter (requires OPENROUTER_API_KEY)
 ## Architecture
 
 ```
-provider.go              → Provider interface (GenerateResponse, StreamResponse)
-streaming.go             → StreamEvent, stream types
-request.go / response.go → GenerateRequest, GenerateResponse
-types.go                 → Block, Message, content types
-tools.go                 → Tool types + ToolRegistry
-schema.go                → JSON Schema helpers
-errors.go                → Typed error handling (rate limits, auth, etc.)
+provider.go              -> Provider interface (GenerateResponse, StreamResponse)
+streaming.go             -> StreamEvent, stream types
+request.go / response.go -> GenerateRequest, GenerateResponse
+types.go                 -> Block, Message, content types
+tools.go                 -> Tool types + ToolRegistry
+schema.go                -> JSON Schema helpers
+errors.go                -> Typed error handling (rate limits, auth, etc.)
 providers/
-  anthropic/             → Anthropic (Claude) adapter
-  lorem/                 → Mock provider for testing
-  openrouter/            → OpenRouter multi-provider adapter
-internal/                → Internal helpers (not exported)
-docs/                    → Architecture docs (blocks, streaming, tools, errors)
-examples/                → Runnable examples per provider
+  anthropic/             -> Anthropic (Claude) adapter
+  lorem/                 -> Mock provider for testing
+  openrouter/            -> OpenRouter multi-provider adapter
+internal/                -> Internal helpers (not exported)
+docs/                    -> Architecture docs (blocks, streaming, tools, errors)
+examples/                -> Runnable examples per provider
 ```
 
 ### Key Design Principles

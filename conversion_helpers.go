@@ -13,7 +13,7 @@ import (
 // Strategy:
 //   1. Find server_tool_use blocks from different providers in assistant messages
 //   2. Split the assistant message at each cross-provider tool
-//   3. Convert tool_use → synthetic assistant text: "I used the {tool_name} tool"
+//   3. Convert tool_use -> synthetic assistant text: "I used the {tool_name} tool"
 //   4. Find following result blocks (text blocks after tool_use)
 //   5. Inject synthetic user message with tool results
 //   6. Continue with remaining blocks in new assistant message

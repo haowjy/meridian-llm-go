@@ -106,7 +106,7 @@ func (p *Provider) convertBashTool(tool *llmprovider.Tool) (anthropic.ToolUnionP
 
 // convertCustomTool converts custom function tool to Anthropic custom tool format.
 // Custom tools are client-side executed.
-// Converts typed ToolInputSchema → Anthropic format (input_schema).
+// Converts typed ToolInputSchema -> Anthropic format (input_schema).
 func (p *Provider) convertCustomTool(tool *llmprovider.Tool) (anthropic.ToolUnionParam, error) {
 	// With typed ToolInputSchema, we have direct access to all fields.
 	// No more type assertions needed - the schema is already properly typed.

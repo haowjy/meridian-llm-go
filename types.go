@@ -18,9 +18,9 @@ const (
 // Used primarily for web search results, but can represent any citation type.
 //
 // Provider mappings:
-// - Anthropic: text.citations[] → Citation (web_search_result_location)
-// - Google: groundingSupports[] → Citation (grounding_support)
-// - OpenAI/OpenRouter: annotations[] → Citation (url_citation)
+// - Anthropic: text.citations[] -> Citation (web_search_result_location)
+// - Google: groundingSupports[] -> Citation (grounding_support)
+// - OpenAI/OpenRouter: annotations[] -> Citation (url_citation)
 type Citation struct {
 	// Type indicates the citation type
 	// Values: "web_search_result", "url_citation", "grounding_support"

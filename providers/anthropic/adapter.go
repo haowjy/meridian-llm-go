@@ -310,7 +310,7 @@ func splitMessagesAtToolResults(messages []llmprovider.Message) []llmprovider.Me
 // Rationale:
 //   Defense-in-depth for message alternation. After splitMessagesAtToolResults(),
 //   when a new user turn follows a tool_result, we get consecutive user messages
-//   that must be merged: [user (last tool_result), user (new text)] → [user (tool_result, text)]
+//   that must be merged: [user (last tool_result), user (new text)] -> [user (tool_result, text)]
 func mergeConsecutiveSameRoleMessages(messages []llmprovider.Message) []llmprovider.Message {
 	if len(messages) <= 1 {
 		return messages
@@ -643,7 +643,7 @@ func (p *Provider) convertAnthropicBlock(content anthropic.ContentBlockUnion, se
 			executionSide := llmprovider.ExecutionSideProvider
 
 			// Determine block type based on tool name.
-			// web_search → BlockTypeWebSearch (invocation, LLM request, provider-executed)
+			// web_search -> BlockTypeWebSearch (invocation, LLM request, provider-executed)
 			// Other provider-side tools use generic BlockTypeToolUse.
 			blockType := llmprovider.BlockTypeToolUse // Default for provider-side tools
 			if content.Name == "web_search" {

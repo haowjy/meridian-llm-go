@@ -229,9 +229,9 @@ type StreamEvent struct {
 // - TOOL_CALL_START, TOOL_CALL_ARGS, TOOL_CALL_END
 
 // Type-safe accessors:
-// event.GetTextMessageContent()  → *events.TextMessageContentEvent
-// event.GetToolCallStart()       → *events.ToolCallStartEvent
-// event.GetThinkingStart()       → *events.ThinkingStartEvent
+// event.GetTextMessageContent()  -> *events.TextMessageContentEvent
+// event.GetToolCallStart()       -> *events.ToolCallStartEvent
+// event.GetThinkingStart()       -> *events.ThinkingStartEvent
 ```
 
 ## RequestParams (Unified)

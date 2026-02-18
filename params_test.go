@@ -200,7 +200,7 @@ func TestRequestParams_GetThinkingBudgetTokens(t *testing.T) {
 				ThinkingEnabled: boolPtr(true),
 				ThinkingLevel:   stringPtr("low"),
 			},
-			expected: 3276, // 16384 * 0.20 = 3276.8 → 3276
+			expected: 3276, // 16384 * 0.20 = 3276.8 -> 3276
 		},
 		{
 			name: "thinking enabled with medium level (50%)",
@@ -216,7 +216,7 @@ func TestRequestParams_GetThinkingBudgetTokens(t *testing.T) {
 				ThinkingEnabled: boolPtr(true),
 				ThinkingLevel:   stringPtr("high"),
 			},
-			expected: 13107, // 16384 * 0.80 = 13107.2 → 13107
+			expected: 13107, // 16384 * 0.80 = 13107.2 -> 13107
 		},
 		{
 			name: "thinking enabled with xhigh level (95%)",
@@ -224,7 +224,7 @@ func TestRequestParams_GetThinkingBudgetTokens(t *testing.T) {
 				ThinkingEnabled: boolPtr(true),
 				ThinkingLevel:   stringPtr("xhigh"),
 			},
-			expected: 15564, // 16384 * 0.95 = 15564.8 → 15564
+			expected: 15564, // 16384 * 0.95 = 15564.8 -> 15564
 		},
 		{
 			name: "unknown thinking level returns error",
@@ -278,7 +278,7 @@ func TestCalculateThinkingBudget(t *testing.T) {
 			name:      "low effort with 8192 tokens",
 			maxTokens: 8192,
 			effort:    "low",
-			expected:  1638, // 8192 * 0.20 = 1638.4 → 1638
+			expected:  1638, // 8192 * 0.20 = 1638.4 -> 1638
 		},
 		{
 			name:      "medium effort with 8192 tokens",
@@ -290,13 +290,13 @@ func TestCalculateThinkingBudget(t *testing.T) {
 			name:      "high effort with 8192 tokens",
 			maxTokens: 8192,
 			effort:    "high",
-			expected:  6553, // 8192 * 0.80 = 6553.6 → 6553
+			expected:  6553, // 8192 * 0.80 = 6553.6 -> 6553
 		},
 		{
 			name:      "xhigh effort with 8192 tokens",
 			maxTokens: 8192,
 			effort:    "xhigh",
-			expected:  7782, // 8192 * 0.95 = 7782.4 → 7782
+			expected:  7782, // 8192 * 0.95 = 7782.4 -> 7782
 		},
 		{
 			name:      "invalid effort level",

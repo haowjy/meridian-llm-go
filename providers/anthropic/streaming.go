@@ -220,7 +220,7 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 // - MessageStart: Contains message metadata (id, model, role)
 // - ContentBlockStart: New content block started (index, type)
 // - ContentBlockDelta: Incremental content for current block (text_delta, input_json_delta)
-// - ContentBlockStop: Current block finished → we emit complete block here
+// - ContentBlockStop: Current block finished -> we emit complete block here
 // - MessageDelta: Message-level delta (stop_reason, stop_sequence)
 // - MessageStop: Streaming complete
 func (p *Provider) emitAnthropicStreamEvents(event anthropic.MessageStreamEventUnion, message *anthropic.Message, tools []llmprovider.Tool, emitter *llmprovider.EventEmitter, dbg streamDebug) {

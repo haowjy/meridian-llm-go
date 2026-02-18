@@ -149,7 +149,7 @@ func isCutoffModel(model string) bool {
 
 // StreamResponse generates a streaming lorem ipsum response with rotating block types.
 // Speed varies based on model name (lorem-slow, lorem-fast, lorem-medium).
-// Rotates through: text (20 words) → thinking (20 words, if enabled) → tool_use → repeat
+// Rotates through: text (20 words) -> thinking (20 words, if enabled) -> tool_use -> repeat
 func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.GenerateRequest) (<-chan llmprovider.StreamEvent, error) {
 	// Validate model
 	if !p.SupportsModel(req.Model) {
@@ -198,7 +198,7 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 			)
 		}
 
-		// Rotation pattern: text → [thinking] → [tool_use if enabled] → repeat
+		// Rotation pattern: text -> [thinking] -> [tool_use if enabled] -> repeat
 		// Each text/thinking block: 20 words
 		// Tool blocks: ~20 tokens for JSON
 		for totalOutputTokens < maxTokens {
