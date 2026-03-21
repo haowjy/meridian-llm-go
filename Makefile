@@ -1,4 +1,4 @@
-.PHONY: examples clean test run-anthropic-basic run-anthropic-streaming run-anthropic-thinking run-lorem-basic run-lorem-streaming run-openrouter-streaming
+.PHONY: examples clean test run-anthropic-basic run-anthropic-streaming run-anthropic-thinking run-lorem-basic run-lorem-streaming run-openrouter-streaming run-middleware-metering
 
 # Build all example binaries
 examples:
@@ -9,12 +9,13 @@ examples:
 	@cd examples/lorem-basic && go build -o ../../lorem-basic
 	@cd examples/lorem-streaming && go build -o ../../lorem-streaming
 	@cd examples/openrouter-streaming && go build -o ../../openrouter-streaming
+	@cd examples/middleware-metering && go build -o ../../middleware-metering
 	@echo "Examples built successfully!"
 
 # Clean example binaries
 clean:
 	@echo "Cleaning example binaries..."
-	@rm -f anthropic-basic anthropic-streaming anthropic-thinking lorem-basic lorem-streaming openrouter-streaming
+	@rm -f anthropic-basic anthropic-streaming anthropic-thinking lorem-basic lorem-streaming openrouter-streaming middleware-metering
 	@echo "Cleaned!"
 
 # Run tests
@@ -41,6 +42,9 @@ run-lorem-streaming: examples
 run-openrouter-streaming: examples
 	@./openrouter-streaming
 
+run-middleware-metering: examples
+	@./middleware-metering
+
 # Help
 help:
 	@echo "Available targets:"
@@ -53,6 +57,7 @@ help:
 	@echo "  make run-lorem-basic        - Build and run Lorem basic example"
 	@echo "  make run-lorem-streaming    - Build and run Lorem streaming example"
 	@echo "  make run-openrouter-streaming - Build and run OpenRouter streaming example"
+	@echo "  make run-middleware-metering - Build and run middleware metering example (no API key needed)"
 	@echo ""
 	@echo "Note: Anthropic examples require ANTHROPIC_API_KEY environment variable"
 	@echo "Note: OpenRouter examples require OPENROUTER_API_KEY environment variable"
