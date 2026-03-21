@@ -71,17 +71,15 @@ func main() {
 	fmt.Println("Streaming response:")
 	fmt.Println("---")
 
-	eventChan, err := provider.StreamResponse(context.Background(), req)
+	stream, err := provider.StreamResponse(context.Background(), req)
 	if err != nil {
 		log.Fatalf("Failed to start streaming: %v", err)
 	}
+	defer stream.Close()
 
 	// Read streaming events
-	for event := range eventChan {
-		// Handle errors
-		if event.Error != nil {
-			log.Fatalf("Streaming error: %v", event.Error)
-		}
+	for stream.Next() {
+		event := stream.Event()
 
 		// Handle AG-UI text message content
 		if evt, ok := event.GetTextMessageContent(); ok {
@@ -106,6 +104,9 @@ func main() {
 				}
 			}
 		}
+	}
+	if err := stream.Err(); err != nil {
+		log.Fatalf("Streaming error: %v", err)
 	}
 
 	fmt.Println("\n=== Example Complete ===")

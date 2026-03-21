@@ -36,8 +36,7 @@ func (d streamDebug) Warn(msg string, args ...any) {
 const DefaultStreamingIdleTimeout = 2 * time.Minute
 
 // StreamResponse generates a streaming response from Claude.
-// Returns a channel that emits StreamEvent as deltas arrive from the API.
-func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.GenerateRequest) (<-chan llmprovider.StreamEvent, error) {
+func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.GenerateRequest) (*llmprovider.Stream, error) {
 	// Validate model
 	if !p.SupportsModel(req.Model) {
 		return nil, &llmprovider.ModelError{
@@ -60,12 +59,19 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 		return nil, err
 	}
 
+	ctx, cancel := context.WithCancel(ctx)
+
 	// Create streaming channel
 	eventChan := make(chan llmprovider.StreamEvent, 10) // Buffered to prevent blocking
 
 	// Start streaming goroutine with idle timeout detection
 	go func() {
 		defer close(eventChan)
+		defer func() {
+			if r := recover(); r != nil {
+				eventChan <- llmprovider.StreamEvent{Error: llmprovider.NewStreamPanicError(r)}
+			}
+		}()
 
 		// Create debug logger instance
 		dbg := streamDebug{enabled: p.debugStreamLogs, logger: p.logger}
@@ -90,6 +96,14 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 		// Start SDK stream reader goroutine
 		go func() {
 			defer close(sdkEventChan)
+			defer func() {
+				if r := recover(); r != nil {
+					select {
+					case sdkErrChan <- llmprovider.NewStreamPanicError(r):
+					default:
+					}
+				}
+			}()
 			for stream.Next() {
 				select {
 				case sdkEventChan <- sdkEvent{event: stream.Current(), ok: true}:
@@ -201,7 +215,7 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 		}
 	}()
 
-	return eventChan, nil
+	return llmprovider.NewStreamFromChan(ctx, eventChan, cancel), nil
 }
 
 // emitAnthropicStreamEvents converts Anthropic streaming events and emits them via EventEmitter.

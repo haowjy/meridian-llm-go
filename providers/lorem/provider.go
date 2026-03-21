@@ -150,7 +150,7 @@ func isCutoffModel(model string) bool {
 // StreamResponse generates a streaming lorem ipsum response with rotating block types.
 // Speed varies based on model name (lorem-slow, lorem-fast, lorem-medium).
 // Rotates through: text (20 words) -> thinking (20 words, if enabled) -> tool_use -> repeat
-func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.GenerateRequest) (<-chan llmprovider.StreamEvent, error) {
+func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.GenerateRequest) (*llmprovider.Stream, error) {
 	// Validate model
 	if !p.SupportsModel(req.Model) {
 		return nil, &llmprovider.ModelError{
@@ -170,12 +170,19 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 	thinkingEnabled := params.ThinkingEnabled != nil && *params.ThinkingEnabled
 	toolsEnabled := len(params.Tools) > 0
 
+	ctx, cancel := context.WithCancel(ctx)
+
 	// Create buffered channel
 	eventChan := make(chan llmprovider.StreamEvent, 10)
 
 	// Start streaming goroutine
 	go func() {
 		defer close(eventChan)
+		defer func() {
+			if r := recover(); r != nil {
+				eventChan <- llmprovider.StreamEvent{Error: llmprovider.NewStreamPanicError(r)}
+			}
+		}()
 
 		// Create EventEmitter for AG-UI events
 		emitter := llmprovider.NewEventEmitter(eventChan)
@@ -338,7 +345,7 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 		})
 	}()
 
-	return eventChan, nil
+	return llmprovider.NewStreamFromChan(ctx, eventChan, cancel), nil
 }
 
 // streamThinkingBlock streams a thinking block with signature and targetWords words.

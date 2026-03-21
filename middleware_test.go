@@ -10,13 +10,14 @@ import (
 
 // mockProvider is a minimal Provider for testing middleware composition.
 type mockProvider struct {
-	name          ProviderID
-	generateResp  *GenerateResponse
-	generateErr   error
-	streamEvents  []StreamEvent
-	streamErr     error
-	generateCalls atomic.Int32
-	streamCalls   atomic.Int32
+	name              ProviderID
+	generateResp      *GenerateResponse
+	generateErr       error
+	streamEvents      []StreamEvent
+	streamTerminalErr error
+	streamErr         error
+	generateCalls     atomic.Int32
+	streamCalls       atomic.Int32
 }
 
 func newMockProvider(name ProviderID) *mockProvider {
@@ -47,20 +48,15 @@ func (p *mockProvider) GenerateResponse(_ context.Context, _ *GenerateRequest) (
 	return p.generateResp, nil
 }
 
-func (p *mockProvider) StreamResponse(_ context.Context, _ *GenerateRequest) (<-chan StreamEvent, error) {
+func (p *mockProvider) StreamResponse(_ context.Context, _ *GenerateRequest) (*Stream, error) {
 	p.streamCalls.Add(1)
 	if p.streamErr != nil {
 		return nil, p.streamErr
 	}
-	ch := make(chan StreamEvent, len(p.streamEvents))
-	for _, e := range p.streamEvents {
-		ch <- e
-	}
-	close(ch)
-	return ch, nil
+	return StreamFromSlice(p.streamEvents, p.streamTerminalErr), nil
 }
 
-func (p *mockProvider) Name() ProviderID          { return p.name }
+func (p *mockProvider) Name() ProviderID            { return p.name }
 func (p *mockProvider) SupportsModel(m string) bool { return m == "test-model" }
 
 // orderTrackingMiddleware records when it is called to verify composition order.
@@ -69,15 +65,15 @@ type orderTrackingMiddleware struct {
 	order *[]string
 }
 
-func (m *orderTrackingMiddleware) WrapGenerate(info ProviderCallInfo, next GenerateFunc) GenerateFunc {
+func (m *orderTrackingMiddleware) WrapGenerate(_ ProviderCallInfo, next GenerateFunc) GenerateFunc {
 	return func(ctx context.Context, req *GenerateRequest) (*GenerateResponse, error) {
 		*m.order = append(*m.order, m.id)
 		return next(ctx, req)
 	}
 }
 
-func (m *orderTrackingMiddleware) WrapStream(info ProviderCallInfo, next StreamFunc) StreamFunc {
-	return func(ctx context.Context, req *GenerateRequest) (<-chan StreamEvent, error) {
+func (m *orderTrackingMiddleware) WrapStream(_ ProviderCallInfo, next StreamFunc) StreamFunc {
+	return func(ctx context.Context, req *GenerateRequest) (*Stream, error) {
 		*m.order = append(*m.order, m.id)
 		return next(ctx, req)
 	}
@@ -106,7 +102,7 @@ func (m *denyMiddleware) WrapGenerate(_ ProviderCallInfo, _ GenerateFunc) Genera
 }
 
 func (m *denyMiddleware) WrapStream(_ ProviderCallInfo, _ StreamFunc) StreamFunc {
-	return func(_ context.Context, _ *GenerateRequest) (<-chan StreamEvent, error) {
+	return func(_ context.Context, _ *GenerateRequest) (*Stream, error) {
 		return nil, m.err
 	}
 }
@@ -148,12 +144,17 @@ func TestWrapProvider_CompositionOrder_Stream(t *testing.T) {
 	m2 := &orderTrackingMiddleware{id: "second", order: &order}
 
 	wrapped := WrapProvider(base, m1, m2)
-	ch, err := wrapped.StreamResponse(context.Background(), &GenerateRequest{Model: "test-model"})
+	stream, err := wrapped.StreamResponse(context.Background(), &GenerateRequest{Model: "test-model"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// Drain the channel
-	for range ch {
+	defer stream.Close()
+
+	// Drain the stream
+	for stream.Next() {
+	}
+	if err := stream.Err(); err != nil {
+		t.Fatalf("unexpected stream err: %v", err)
 	}
 
 	if len(order) != 2 || order[0] != "first" || order[1] != "second" {
@@ -272,20 +273,24 @@ func TestWrapProvider_StreamPassthrough(t *testing.T) {
 	noop := &orderTrackingMiddleware{id: "noop", order: &[]string{}}
 
 	wrapped := WrapProvider(base, noop)
-	ch, err := wrapped.StreamResponse(context.Background(), &GenerateRequest{Model: "test-model"})
-
+	stream, err := wrapped.StreamResponse(context.Background(), &GenerateRequest{Model: "test-model"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	defer stream.Close()
 
 	var metadataReceived bool
-	for event := range ch {
+	for stream.Next() {
+		event := stream.Event()
 		if event.Metadata != nil {
 			metadataReceived = true
 			if event.Metadata.Model != "test-model" {
 				t.Errorf("expected model test-model, got %s", event.Metadata.Model)
 			}
 		}
+	}
+	if err := stream.Err(); err != nil {
+		t.Fatalf("unexpected stream err: %v", err)
 	}
 	if !metadataReceived {
 		t.Error("expected to receive metadata event")
@@ -326,7 +331,7 @@ func (m *mutatingMiddleware) WrapGenerate(_ ProviderCallInfo, next GenerateFunc)
 }
 
 func (m *mutatingMiddleware) WrapStream(_ ProviderCallInfo, next StreamFunc) StreamFunc {
-	return func(ctx context.Context, req *GenerateRequest) (<-chan StreamEvent, error) {
+	return func(ctx context.Context, req *GenerateRequest) (*Stream, error) {
 		cloned := *req
 		cloned.Model = m.newModel
 		return next(ctx, &cloned)
@@ -356,12 +361,16 @@ func TestWrapProvider_ConcurrentSafety(t *testing.T) {
 		// Stream goroutine
 		go func() {
 			defer wg.Done()
-			ch, err := wrapped.StreamResponse(context.Background(), &GenerateRequest{Model: "test-model"})
+			stream, err := wrapped.StreamResponse(context.Background(), &GenerateRequest{Model: "test-model"})
 			if err != nil {
 				errs <- err
 				return
 			}
-			for range ch {
+			defer stream.Close()
+			for stream.Next() {
+			}
+			if err := stream.Err(); err != nil {
+				errs <- err
 			}
 		}()
 	}

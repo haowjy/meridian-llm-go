@@ -16,7 +16,7 @@ import (
 
 // StreamResponsesAPI generates a streaming response using the OpenRouter Responses API.
 // This is an alternative to the Chat Completions API with better tool call streaming.
-func (p *Provider) StreamResponsesAPI(ctx context.Context, req *llmprovider.GenerateRequest) (<-chan llmprovider.StreamEvent, error) {
+func (p *Provider) StreamResponsesAPI(ctx context.Context, req *llmprovider.GenerateRequest) (*llmprovider.Stream, error) {
 	// Validate model
 	if !p.SupportsModel(req.Model) {
 		return nil, &llmprovider.ModelError{
@@ -62,12 +62,19 @@ func (p *Provider) StreamResponsesAPI(ctx context.Context, req *llmprovider.Gene
 		return nil, p.handleErrorResponse(resp, req.Model)
 	}
 
+	ctx, cancel := context.WithCancel(ctx)
+
 	// Create streaming channel
 	eventChan := make(chan llmprovider.StreamEvent, 10)
 
 	// Start streaming goroutine
 	go func() {
 		defer close(eventChan)
+		defer func() {
+			if r := recover(); r != nil {
+				eventChan <- llmprovider.StreamEvent{Error: llmprovider.NewStreamPanicError(r)}
+			}
+		}()
 		defer func() { _ = resp.Body.Close() }()
 
 		if err := p.streamResponsesEvents(ctx, resp.Body, eventChan); err != nil {
@@ -75,7 +82,7 @@ func (p *Provider) StreamResponsesAPI(ctx context.Context, req *llmprovider.Gene
 		}
 	}()
 
-	return eventChan, nil
+	return llmprovider.NewStreamFromChan(ctx, eventChan, cancel), nil
 }
 
 // buildHTTPRequestResponses creates an HTTP request for the Responses API.

@@ -50,7 +50,8 @@ type StreamEvent struct {
 	// This is separate from Metadata which is the final event
 	GenerationIDDiscovered *GenerationIDEvent `json:"generationIDDiscovered,omitempty"`
 
-	// Error contains any error that occurred during streaming (nil if successful)
+	// Internal transport field: provider goroutine -> NewStreamFromChan only.
+	// Consumers of *Stream should ignore this and use stream.Err().
 	Error error `json:"error,omitempty"`
 }
 

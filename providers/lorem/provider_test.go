@@ -148,19 +148,17 @@ func TestProvider_StreamResponse(t *testing.T) {
 		},
 	}
 
-	eventChan, err := provider.StreamResponse(ctx, req)
+	stream, err := provider.StreamResponse(ctx, req)
 	if err != nil {
 		t.Fatalf("StreamResponse failed: %v", err)
 	}
+	defer stream.Close()
 
 	var aguiEventCount int
 	var metadata *llmprovider.StreamMetadata
-	var lastError error
 
-	for event := range eventChan {
-		if event.Error != nil {
-			lastError = event.Error
-		}
+	for stream.Next() {
+		event := stream.Event()
 		if event.IsAGUIEvent() {
 			aguiEventCount++
 		}
@@ -168,6 +166,7 @@ func TestProvider_StreamResponse(t *testing.T) {
 			metadata = event.Metadata
 		}
 	}
+	lastError := stream.Err()
 
 	if lastError != nil {
 		t.Errorf("received error event: %v", lastError)
@@ -228,15 +227,17 @@ func TestProvider_StreamResponse_Speed(t *testing.T) {
 			}
 
 			start := time.Now()
-			eventChan, err := provider.StreamResponse(ctx, req)
+			stream, err := provider.StreamResponse(ctx, req)
 			if err != nil {
 				t.Fatalf("StreamResponse failed: %v", err)
 			}
+			defer stream.Close()
 
 			var firstDelta time.Time
 			var secondDelta time.Time
 
-			for event := range eventChan {
+			for stream.Next() {
+				event := stream.Event()
 				// Check for AG-UI text content or thinking content events
 				if _, ok := event.GetTextMessageContent(); ok {
 					if firstDelta.IsZero() {

@@ -168,7 +168,7 @@ func emitStreamingBlocks(
 
 // StreamResponse generates a streaming response from OpenRouter.
 // Routes to Responses API or Chat Completions API based on provider configuration.
-func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.GenerateRequest) (<-chan llmprovider.StreamEvent, error) {
+func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.GenerateRequest) (*llmprovider.Stream, error) {
 	// Route to Responses API if enabled
 	// Responses API provides better tool call streaming with item-based events
 	if p.useResponsesAPI {
@@ -181,7 +181,7 @@ func (p *Provider) StreamResponse(ctx context.Context, req *llmprovider.Generate
 
 // streamChatCompletionsAPI generates a streaming response using the Chat Completions API.
 // This is the original implementation, now factored out for clarity.
-func (p *Provider) streamChatCompletionsAPI(ctx context.Context, req *llmprovider.GenerateRequest) (<-chan llmprovider.StreamEvent, error) {
+func (p *Provider) streamChatCompletionsAPI(ctx context.Context, req *llmprovider.GenerateRequest) (*llmprovider.Stream, error) {
 	// Validate model
 	if !p.SupportsModel(req.Model) {
 		return nil, &llmprovider.ModelError{
@@ -227,12 +227,19 @@ func (p *Provider) streamChatCompletionsAPI(ctx context.Context, req *llmprovide
 		return nil, p.handleErrorResponse(resp, req.Model)
 	}
 
+	ctx, cancel := context.WithCancel(ctx)
+
 	// Create streaming channel
 	eventChan := make(chan llmprovider.StreamEvent, 10) // Buffered to prevent blocking
 
 	// Start streaming goroutine
 	go func() {
 		defer close(eventChan)
+		defer func() {
+			if r := recover(); r != nil {
+				eventChan <- llmprovider.StreamEvent{Error: llmprovider.NewStreamPanicError(r)}
+			}
+		}()
 		defer func() { _ = resp.Body.Close() }()
 
 		if err := p.streamEvents(ctx, resp.Body, eventChan); err != nil {
@@ -240,7 +247,7 @@ func (p *Provider) streamChatCompletionsAPI(ctx context.Context, req *llmprovide
 		}
 	}()
 
-	return eventChan, nil
+	return llmprovider.NewStreamFromChan(ctx, eventChan, cancel), nil
 }
 
 // streamEvents reads SSE events and emits library StreamEvents.
