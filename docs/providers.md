@@ -310,5 +310,3 @@ type Provider interface {
 - [tools.md](tools.md) - Tool support per provider
 - [errors.md](errors.md) - Provider error mappings
 
-For **provider adapter architecture**, see:
-- `../../_docs/technical/llm/architecture.md`

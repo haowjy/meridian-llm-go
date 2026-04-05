@@ -65,10 +65,6 @@ for _, block := range resp.Blocks {
 
 ## Integration
 
-For **Meridian backend integration**, see:
-- [Backend integration overview](../../_docs/technical/llm/llm-integration.md)
-- [Backend streaming architecture](../../_docs/technical/backend/architecture/streaming-architecture.md)
-
 ## Examples
 
 ```go
@@ -122,8 +118,3 @@ req.Params = &llm.RequestParams{
 
 See [providers.md](providers.md) for details.
 
-## Related Documentation
-
-- **Backend integration**: `../../_docs/technical/llm/`
-- **Product docs**: `../../_docs/high-level/`
-- **Implementation plan**: `../../_docs/hidden/handoffs/llm-provider-unification-plan-v5.md`

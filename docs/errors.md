@@ -326,5 +326,3 @@ const (
 - [streaming.md](streaming.md) - Streaming error handling
 - [providers.md](providers.md) - Provider-specific error behaviors
 
-For **backend error handling** (retry strategies, user messages), see:
-- `../../_docs/technical/llm/error-normalization.md`

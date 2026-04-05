@@ -374,5 +374,3 @@ See `examples/` directory:
 - [errors.md](errors.md) - Error handling
 - [AG-UI Protocol](https://github.com/ag-ui-protocol/ag-ui) - Event specification
 
-For **backend streaming architecture** (SSE, catchup, persistence), see:
-- `../../_docs/technical/backend/architecture/streaming-architecture.md`

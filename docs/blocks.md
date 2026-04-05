@@ -387,5 +387,3 @@ const (
 - [tools.md](tools.md) - Tool execution patterns
 - [providers.md](providers.md) - Provider-specific block mappings
 
-For **backend block extensions** (reference, partial_reference), see:
-- `../../_docs/technical/llm/streaming/block-types-reference.md`
